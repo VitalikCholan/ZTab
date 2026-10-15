@@ -26,3 +26,35 @@ pub fn testnet_config(tmp: &Path) -> Config {
     .collect();
     Config::from_map(&m).unwrap()
 }
+
+/// Builds `AppState` exactly like `main.rs` on a leaked tempdir, serves the router on an
+/// ephemeral localhost port, and returns the state with the bound address.
+pub async fn spawn_state_and_server() -> (ztab_watcher::http::AppState, std::net::SocketAddr) {
+    use std::sync::Arc;
+    use ztab_watcher::{
+        http::{router, AppState, HealthState},
+        meta::MetaStore,
+        remote,
+        wallet::WalletStore,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = Arc::new(testnet_config(tmp.path()));
+    std::mem::forget(tmp); // keep the data dir alive for the life of the test process
+    let wallet = Arc::new(WalletStore::open(&cfg).unwrap());
+    let meta = Arc::new(MetaStore::open(&cfg).unwrap());
+    let client = Arc::new(tokio::sync::Mutex::new(
+        remote::connect(&cfg).await.unwrap(),
+    ));
+    let state = AppState {
+        cfg,
+        wallet,
+        meta,
+        client,
+        health: Arc::new(HealthState::default()),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router(state.clone());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (state, addr)
+}

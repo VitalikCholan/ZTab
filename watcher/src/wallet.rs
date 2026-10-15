@@ -197,6 +197,10 @@ fn index_from_be(b: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes([n[7], n[8], n[9], n[10]]))
 }
 
+pub fn account_uuid(u: Uuid) -> AccountUuid {
+    AccountUuid::from_uuid(u)
+}
+
 #[cfg(test)]
 mod tests {
     use super::index_from_be;
