@@ -744,3 +744,62 @@ async fn node_lookup_finds_the_mined_spike_sweep_but_not_an_unbroadcast_one() {
         .await
         .unwrap());
 }
+
+#[tokio::test]
+#[ignore]
+async fn get_tab_is_served_from_db_when_offline() {
+    let (state, addr) = common::spawn_state_and_server().await;
+    let tab_id = common::register_fixture_tab(&state, 2).await;
+    let http = reqwest::Client::new();
+
+    // Health needs no auth and, before any sync, reports no lag.
+    let h = http
+        .get(format!("http://{addr}/v1/health"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(h.status(), 200);
+    let j: serde_json::Value = h.json().await.unwrap();
+    for k in [
+        "tip_height",
+        "synced_height",
+        "mempool_subscribed",
+        "lag_seconds",
+        "network",
+    ] {
+        assert!(j.get(k).is_some(), "missing {k}");
+    }
+    assert!(j["lag_seconds"].is_null());
+    assert_eq!(j["network"], "test");
+
+    // Hold the client: a handler that touched it would hang.
+    {
+        let _guard = state.client.lock().await;
+        let started = std::time::Instant::now();
+        let g = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            http.get(format!("http://{addr}/v1/tabs/{tab_id}"))
+                .header("Authorization", "Bearer test-token")
+                .send(),
+        )
+        .await
+        .expect("get_tab must not wait on the lightwalletd client")
+        .unwrap();
+        assert_eq!(g.status(), 200);
+        let j: serde_json::Value = g.json().await.unwrap();
+        assert_eq!(j["stale"], true);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    ztab_watcher::sync::sync_once(&state).await.unwrap();
+    let j: serde_json::Value = http
+        .get(format!("http://{addr}/v1/health"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(j["lag_seconds"].is_number());
+    assert!(j["tip_height"].as_u64().unwrap() > 0);
+}

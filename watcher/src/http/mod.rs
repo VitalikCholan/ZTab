@@ -1,3 +1,4 @@
+pub mod health;
 pub mod sweep;
 pub mod tabs;
 use crate::{config::Config, meta::MetaStore, remote::LwdClient, wallet::WalletStore};
@@ -65,6 +66,7 @@ fn token_matches(given: &[u8], expected: &[u8]) -> bool {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/v1/health", get(health::health))
         .route("/v1/tabs", post(tabs::register))
         .route("/v1/tabs/{tab_id}", get(tabs::get_tab))
         .route(
