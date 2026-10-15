@@ -17,3 +17,4 @@ wallets/
 .DS_Store
 .idea/
 .vscode/
+!watcher/tests/fixtures/*.pczt
