@@ -108,8 +108,8 @@ where
 }
 
 /// Runs `f` on its own task so a panic (e.g. inside the scanner on hostile remote data)
-/// becomes an error instead of killing the sync loop.
-async fn catch_panics<T, F>(f: F) -> Result<T, WatcherError>
+/// becomes an error instead of killing the calling loop.
+pub(crate) async fn catch_panics<T, F>(f: F) -> Result<T, WatcherError>
 where
     T: Send + 'static,
     F: std::future::Future<Output = Result<T, WatcherError>> + Send + 'static,
@@ -117,10 +117,10 @@ where
     match tokio::spawn(f).await {
         Ok(r) => r,
         Err(e) if e.is_panic() => Err(WatcherError::Internal(anyhow::anyhow!(
-            "sync iteration panicked"
+            "background iteration panicked"
         ))),
         Err(e) => Err(WatcherError::Internal(anyhow::anyhow!(
-            "sync iteration aborted: {e}"
+            "background iteration aborted: {e}"
         ))),
     }
 }

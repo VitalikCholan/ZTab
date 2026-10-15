@@ -1,6 +1,7 @@
 use crate::{config::Config, error::WatcherError, remote::LwdClient, rng::OsRng};
 use rusqlite::OptionalExtension;
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
 };
@@ -27,6 +28,8 @@ pub struct WalletStore {
     cache: Mutex<FsBlockDb>,
     read: Mutex<rusqlite::Connection>,
     blocks_dir: PathBuf,
+    /// Orchard receivers of each account's participant addresses, by diversifier index.
+    orchard_receivers: Mutex<HashMap<AccountUuid, Vec<orchard::Address>>>,
 }
 
 impl WalletStore {
@@ -57,6 +60,7 @@ impl WalletStore {
             cache: Mutex::new(cache),
             read: Mutex::new(read),
             blocks_dir: blocks_root.join("blocks"),
+            orchard_receivers: Mutex::new(HashMap::new()),
         })
     }
 
@@ -93,14 +97,10 @@ impl WalletStore {
         ufvk: &str,
         birthday: u32,
     ) -> Result<AccountUuid, WatcherError> {
-        let ufvk = self.parse_ufvk(ufvk)?;
+        let ufvk_parsed = self.parse_ufvk(ufvk)?;
         // Retry after a crash between import and tab insert: reuse the existing account.
-        if let Some(existing) = self
-            .db()
-            .get_account_for_ufvk(&ufvk)
-            .map_err(|e| WatcherError::Wallet(format!("get_account_for_ufvk: {e:?}")))?
-        {
-            return Ok(existing.id());
+        if let Some(existing) = self.account_for_ufvk(&ufvk_parsed)? {
+            return Ok(existing);
         }
         let sapling = self
             .network
@@ -118,8 +118,26 @@ impl WalletStore {
         let chain_state: ChainState = tree_state
             .to_chain_state()
             .map_err(|e| WatcherError::Remote(format!("tree state: {e}")))?;
-        let account_birthday = AccountBirthday::from_parts(chain_state, None);
+        self.import_tab_account_from_chain_state(tab_id, ufvk, chain_state)
+    }
+
+    /// Imports a view-only account named after the tab whose birthday is the block after
+    /// `chain_state`; an account already holding this UFVK is reused.
+    pub fn import_tab_account_from_chain_state(
+        &self,
+        tab_id: Uuid,
+        ufvk: &str,
+        chain_state: ChainState,
+    ) -> Result<AccountUuid, WatcherError> {
+        let ufvk = self.parse_ufvk(ufvk)?;
         let mut db = self.db();
+        if let Some(existing) = db
+            .get_account_for_ufvk(&ufvk)
+            .map_err(|e| WatcherError::Wallet(format!("get_account_for_ufvk: {e:?}")))?
+        {
+            return Ok(existing.id());
+        }
+        let account_birthday = AccountBirthday::from_parts(chain_state, None);
         let account = db
             .import_account_ufvk(
                 &tab_id.to_string(),
@@ -130,6 +148,17 @@ impl WalletStore {
             )
             .map_err(|e| WatcherError::Wallet(format!("import_account_ufvk: {e:?}")))?;
         Ok(account.id())
+    }
+
+    fn account_for_ufvk(
+        &self,
+        ufvk: &UnifiedFullViewingKey,
+    ) -> Result<Option<AccountUuid>, WatcherError> {
+        Ok(self
+            .db()
+            .get_account_for_ufvk(ufvk)
+            .map_err(|e| WatcherError::Wallet(format!("get_account_for_ufvk: {e:?}")))?
+            .map(|a| a.id()))
     }
 
     /// Orchard-only unified addresses for diversifier indices `0..count`; persisted in the
@@ -178,6 +207,64 @@ impl WalletStore {
             out.push((i, ua.encode(&self.network)));
         }
         Ok(out)
+    }
+
+    /// The participant index in `0..participants` whose Orchard-only address has `addr` as
+    /// its Orchard receiver. Receivers are derived from the account's UFVK exactly as
+    /// `participant_addresses` derives them, without writing to the wallet, and cached.
+    pub fn index_for_orchard_address(
+        &self,
+        account: AccountUuid,
+        participants: u32,
+        addr: &orchard::Address,
+    ) -> Result<Option<u32>, WatcherError> {
+        let lookup = |receivers: &[orchard::Address]| {
+            receivers
+                .iter()
+                .take(participants as usize)
+                .position(|r| r == addr)
+                .map(|i| i as u32)
+        };
+        {
+            let cache = self
+                .orchard_receivers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(receivers) = cache.get(&account) {
+                if receivers.len() >= participants as usize {
+                    return Ok(lookup(receivers));
+                }
+            }
+        }
+        let ufvk = self
+            .db()
+            .get_account(account)
+            .map_err(|e| WatcherError::Wallet(format!("get_account: {e:?}")))?
+            .and_then(|a| a.ufvk().cloned())
+            .ok_or_else(|| WatcherError::Wallet("account has no UFVK".into()))?;
+        let request = UnifiedAddressRequest::custom(
+            ReceiverRequirement::Require,
+            ReceiverRequirement::Omit,
+            ReceiverRequirement::Omit,
+        )
+        .map_err(|e| WatcherError::Wallet(format!("address request: {e:?}")))?;
+        let receivers = (0..participants)
+            .map(|i| {
+                ufvk.address(DiversifierIndex::from(i), request)
+                    .map_err(|e| {
+                        WatcherError::Wallet(format!("derive address at index {i}: {e:?}"))
+                    })?
+                    .orchard()
+                    .copied()
+                    .ok_or_else(|| WatcherError::Wallet(format!("no orchard receiver at {i}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let index = lookup(&receivers);
+        self.orchard_receivers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(account, receivers);
+        Ok(index)
     }
 
     pub fn index_for_address_id(&self, address_id: i64) -> Result<Option<u32>, WatcherError> {

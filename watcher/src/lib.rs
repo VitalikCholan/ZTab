@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod facts;
 pub mod http;
+pub mod mempool;
 pub mod meta;
 pub mod remote;
 pub mod rng;

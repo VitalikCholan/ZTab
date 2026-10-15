@@ -471,3 +471,89 @@ async fn sync_once_without_tabs_does_not_scan() {
         .unwrap();
     assert_eq!(queued, 0, "an empty wallet must not queue blocks");
 }
+
+/// Refreshes the offline fixtures used by `tests/mempool.rs` (raw funding tx and the
+/// birthday tree state). Writes only missing files; both are public testnet data.
+#[tokio::test]
+#[ignore]
+async fn fetch_mempool_fixtures() {
+    use prost::Message;
+    use zcash_client_backend::proto::service;
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = common::testnet_config(tmp.path());
+    let mut client = ztab_watcher::remote::connect(&cfg).await.unwrap();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for txid in [
+        common::FIXTURE_FUNDING_TXID,
+        common::FIXTURE_INDEX0_PAYMENT_TXID,
+        common::FIXTURE_INDEX1_SELF_SEND_TXID,
+    ] {
+        let raw_path = common::fixture_rawtx_path(txid);
+        if !raw_path.exists() {
+            let internal = ztab_watcher::sync::txid_internal_bytes(txid).unwrap();
+            let raw = client
+                .get_transaction(service::TxFilter {
+                    hash: internal.to_vec(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            std::fs::write(&raw_path, &raw.data).unwrap();
+        }
+        // v5+ transactions carry their own branch id; the argument only affects v4.
+        let tx = zcash_primitives::transaction::Transaction::read(
+            &common::fixture_rawtx(txid)[..],
+            zcash_protocol::consensus::BranchId::Nu6_1,
+        )
+        .unwrap();
+        assert_eq!(tx.txid().to_string(), txid);
+    }
+    let ts_path = dir.join("birthday_treestate.bin");
+    if !ts_path.exists() {
+        let ts = client
+            .get_tree_state(service::BlockId {
+                height: u64::from(common::FIXTURE_BIRTHDAY - 1),
+                hash: vec![],
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        std::fs::write(&ts_path, ts.encode_to_vec()).unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn mempool_loop_resubscribes_after_stream_end() {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    let (state, _server) = common::spawn_state_and_server().await;
+    common::register_fixture_tab(&state, 2).await;
+    for pass_no in 1..=2 {
+        let s = state.clone();
+        let pass = tokio::spawn(async move { ztab_watcher::mempool::mempool_pass(&s).await });
+        let mut subscribed = false;
+        for _ in 0..50 {
+            if state.health.mempool_subscribed.load(Ordering::Relaxed) {
+                subscribed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(subscribed, "pass {pass_no}: not subscribed within 5 s");
+        let started = std::time::Instant::now();
+        let r = tokio::time::timeout(Duration::from_secs(420), pass)
+            .await
+            .expect("stream should end at the next block")
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "pass {pass_no}: seen {} matched {} in {:?}",
+            r.seen,
+            r.matched,
+            started.elapsed()
+        );
+        assert!(!state.health.mempool_subscribed.load(Ordering::Relaxed));
+    }
+}
