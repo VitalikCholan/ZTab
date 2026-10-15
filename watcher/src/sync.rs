@@ -104,7 +104,8 @@ where
             true
         }
         Err(e) => {
-            tracing::warn!(error = %e, "sync failed");
+            tracing::warn!(kind = e.kind(), "sync failed");
+            tracing::debug!(error = %e, "sync failure detail");
             false
         }
     };
@@ -651,11 +652,13 @@ pub async fn refresh_transparent_sources(
         let tx = match Transaction::read(&raw.data[..], BranchId::for_height(&network, height)) {
             Ok(tx) if tx.txid().as_ref() == &internal => tx,
             Ok(_) => {
-                tracing::warn!(txid = %txid, "node returned a different transaction; skipping");
+                tracing::warn!("node returned a different transaction; skipping");
+                tracing::debug!(txid = %txid, "requested transaction");
                 continue;
             }
             Err(e) => {
-                tracing::warn!(txid = %txid, error = %e, "unparseable transaction; skipping");
+                tracing::warn!("unparseable transaction; skipping");
+                tracing::debug!(txid = %txid, error = %e, "unparseable transaction");
                 continue;
             }
         };

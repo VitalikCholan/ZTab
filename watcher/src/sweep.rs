@@ -69,16 +69,20 @@ pub struct SweepStatus {
 }
 
 fn parse_pczt(bytes: &[u8]) -> Result<Pczt, WatcherError> {
-    Pczt::parse(bytes).map_err(|e| WatcherError::Unprocessable(format!("pczt: {e:?}")))
+    Pczt::parse(bytes).map_err(|e| {
+        tracing::debug!(error = ?e, "pczt parse failed");
+        WatcherError::Unprocessable("pczt: not a valid PCZT".into())
+    })
 }
 
 /// The txid of the transaction a PCZT describes. It commits only to the transaction's
 /// effects, not to proofs or signatures, so an offered (proved) PCZT and its signed form
 /// share it. Mirrors zcash-devtool `pczt inspect`.
 fn txid_of(pczt: Pczt) -> Result<String, WatcherError> {
-    let tx_data = pczt
-        .into_effects()
-        .map_err(|e| WatcherError::Unprocessable(format!("pczt effects: {e:?}")))?;
+    let tx_data = pczt.into_effects().map_err(|e| {
+        tracing::debug!(error = ?e, "pczt effects failed");
+        WatcherError::Unprocessable("pczt: does not describe a complete transaction".into())
+    })?;
     let parts = tx_data.digest(TxIdDigester);
     Ok(to_txid(tx_data.version(), tx_data.consensus_branch_id(), &parts).to_string())
 }
@@ -228,7 +232,10 @@ fn create_proved_pczt_blocking(
                 "the tab is not synced yet; retry shortly".into(),
             )),
             BackendError::Payment(e) => {
-                Some(WatcherError::Unprocessable(format!("recipient: {e}")))
+                tracing::debug!(error = %e, "sweep payment rejected");
+                Some(WatcherError::Unprocessable(
+                    "recipient: cannot receive this payment".into(),
+                ))
             }
             e => Some(WatcherError::Wallet(format!("propose: {e:?}"))),
         });
@@ -313,8 +320,8 @@ pub fn pending_sweep(
 fn not_spendable(state: &AppState, tab_id: Uuid) -> Result<WatcherError, WatcherError> {
     if let Some(sweep) = pending_sweep(state, tab_id)? {
         return Ok(WatcherError::Conflict(format!(
-            "a sweep for txid {} is pending; retry /broadcast or wait for its expiry at height {}",
-            sweep.txid, sweep.expiry_height
+            "a sweep is pending; retry /broadcast or wait for its expiry at height {}",
+            sweep.expiry_height
         )));
     }
     Ok(WatcherError::Conflict(format!(
@@ -398,7 +405,7 @@ pub async fn broadcast_signed(
     let bytes = B64
         .decode(b64)
         .or_else(|_| base64::engine::general_purpose::STANDARD.decode(b64))
-        .map_err(|e| WatcherError::Unprocessable(format!("pczt_b64: {e}")))?;
+        .map_err(|_| WatcherError::Unprocessable("pczt_b64: not base64".into()))?;
     let pczt = parse_pczt(&bytes)?;
     if txid_of(pczt.clone())? != offered.txid {
         return Err(WatcherError::Conflict(
@@ -516,7 +523,13 @@ fn extract(state: &AppState, pczt: Pczt) -> Result<Vec<u8>, WatcherError> {
         Some((&spend_vk, &output_vk)),
         Some(&orchard_vk),
     )
-    .map_err(|e| WatcherError::Unprocessable(format!("extract: {e:?}")))?;
+    .map_err(|e| {
+        tracing::debug!(error = ?e, "pczt extraction failed");
+        WatcherError::Unprocessable(
+            "extract: the signed PCZT does not verify (missing or invalid signature or proof)"
+                .into(),
+        )
+    })?;
     drop(db);
     stored_raw(state, &txid.to_string())
 }

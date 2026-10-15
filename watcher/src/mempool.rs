@@ -68,7 +68,11 @@ pub async fn run_mempool_loop(state: AppState) -> ! {
                 true
             }
             Err(e) => {
-                tracing::warn!(error = %e, "mempool stream failed; resubscribing after backoff");
+                tracing::warn!(
+                    kind = e.kind(),
+                    "mempool stream failed; resubscribing after backoff"
+                );
+                tracing::debug!(error = %e, "mempool failure detail");
                 false
             }
         };

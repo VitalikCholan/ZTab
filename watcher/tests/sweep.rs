@@ -65,13 +65,17 @@ async fn unsigned_or_garbage_pczt_is_unprocessable() {
         .meta
         .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), "x", 10)
         .unwrap();
-    // Matches the offer but lacks signatures: extraction fails, nothing is sent.
-    let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.proved.pczt")).await;
-    assert!(matches!(r, Err(WatcherError::Unprocessable(_))), "{r:?}");
-    let r = broadcast_signed(&state, &tab, "not base64!").await;
-    assert!(matches!(r, Err(WatcherError::Unprocessable(_))), "{r:?}");
-    let r = broadcast_signed(&state, &tab, &B64.encode(b"PCZTjunk")).await;
-    assert!(matches!(r, Err(WatcherError::Unprocessable(_))), "{r:?}");
+    // Matches the offer but lacks signatures: extraction fails, nothing is sent. The 422
+    // bodies are fixed phrases, never library Debug output.
+    let fixed_phrase = |r: &Result<String, WatcherError>| matches!(r, Err(WatcherError::Unprocessable(m)) if !m.contains(['{', '}']));
+    for submitted in [
+        fixture_b64("sweep.proved.pczt"),
+        "not base64!".to_string(),
+        B64.encode(b"PCZTjunk"),
+    ] {
+        let r = broadcast_signed(&state, &tab, &submitted).await;
+        assert!(fixed_phrase(&r), "{r:?}");
+    }
     let tab = state.meta.get_tab(tab.tab_id).unwrap().unwrap();
     assert_eq!(tab.state, TabState::Open);
 }

@@ -337,9 +337,9 @@ impl MetaStore {
             )
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         if n == 0 {
-            return Err(WatcherError::Conflict(format!(
-                "the tab's offered sweep is not {txid}"
-            )));
+            return Err(WatcherError::Conflict(
+                "the tab's offered sweep is a different transaction".into(),
+            ));
         }
         Ok(())
     }

@@ -50,11 +50,65 @@ impl IntoResponse for WatcherError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
-        tracing::warn!(error = %self, "request failed");
-        (
-            status,
-            Json(serde_json::json!({ "error": self.to_string() })),
-        )
-            .into_response()
+        // The message can carry txids, heights or library detail: debug only.
+        tracing::warn!(
+            kind = self.kind(),
+            status = status.as_u16(),
+            "request failed"
+        );
+        tracing::debug!(error = %self, "request failure detail");
+        // Server-side failures never reach the client in detail; client errors keep their
+        // (fixed, library-free) explanation.
+        let message = if status.is_server_error() {
+            "internal".to_string()
+        } else {
+            self.to_string()
+        };
+        (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn body(e: WatcherError) -> (StatusCode, String) {
+        let r = e.into_response();
+        let status = r.status();
+        let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn server_errors_have_a_generic_body() {
+        let generic = r#"{"error":"internal"}"#;
+        let (status, b) = body(WatcherError::Wallet(
+            "propose: InsufficientFunds { available: 12345 zat, required: 99 }".into(),
+        ))
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(b, generic);
+        assert!(!b.contains("12345"));
+        let (status, b) = body(WatcherError::Remote(
+            "send_transaction: rejected abcd".into(),
+        ))
+        .await;
+        assert_eq!((status, b.as_str()), (StatusCode::BAD_GATEWAY, generic));
+        let (status, b) = body(WatcherError::Internal(anyhow::anyhow!("boom 77 zat"))).await;
+        assert_eq!(
+            (status, b.as_str()),
+            (StatusCode::INTERNAL_SERVER_ERROR, generic)
+        );
+    }
+
+    #[tokio::test]
+    async fn client_errors_keep_their_explanation() {
+        let (status, b) = body(WatcherError::Conflict("tab state is closed".into())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(b, r#"{"error":"conflict: tab state is closed"}"#);
+        let (status, _) = body(WatcherError::Unprocessable("recipient: x".into())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }
