@@ -115,6 +115,21 @@ pub fn aggregate(
         .collect()
 }
 
+/// Drops sightings first seen before `cutoff` (expired, evicted or replaced transactions),
+/// so they stop counting as mempool payments even before the mempool loop prunes them.
+pub fn fresh_sightings(
+    sightings: Vec<Sighting>,
+    cutoff: time::OffsetDateTime,
+) -> Result<Vec<Sighting>, WatcherError> {
+    let mut out = Vec::with_capacity(sightings.len());
+    for s in sightings {
+        if crate::meta::parse_rfc3339(&s.first_seen_at)? >= cutoff {
+            out.push(s);
+        }
+    }
+    Ok(out)
+}
+
 fn werr(e: impl std::fmt::Display) -> WatcherError {
     WatcherError::Wallet(e.to_string())
 }
@@ -159,14 +174,16 @@ pub fn note_rows(wallet: &WalletStore, account_uuid: Uuid) -> Result<Vec<NoteRow
 pub fn tab_facts(
     wallet: &WalletStore,
     meta: &MetaStore,
-    _cfg: &Config,
+    cfg: &Config,
     tab: &TabRow,
     tip: u32,
     synced: u32,
     stale: bool,
 ) -> Result<TabFacts, WatcherError> {
     let notes = note_rows(wallet, tab.account_uuid)?;
-    let sightings = meta.sightings_for_tab(tab.tab_id)?;
+    let cutoff =
+        crate::meta::sighting_cutoff(time::OffsetDateTime::now_utc(), cfg.block_interval_seconds);
+    let sightings = fresh_sightings(meta.sightings_for_tab(tab.tab_id)?, cutoff)?;
     let sources = meta.transparent_sources(notes.iter().map(|n| n.txid.as_str()))?;
     let addresses = wallet.participant_addresses(
         crate::wallet::account_uuid(tab.account_uuid),
@@ -220,6 +237,31 @@ mod tests {
         assert_eq!(p1.status_facts.confirmed_zat, 70);
         assert_eq!(p1.status_facts.mempool_zat, 30);
         assert_eq!(p1.status_facts.best_confirmations, 2);
+    }
+
+    #[test]
+    fn stale_sightings_are_ignored() {
+        let s = |txid: &str, seen: &str| Sighting {
+            txid: txid.into(),
+            participant_index: 0,
+            value_zat: 10,
+            first_seen_at: seen.into(),
+        };
+        let cutoff = crate::meta::parse_rfc3339("2026-10-15T10:00:00Z").unwrap();
+        let fresh = fresh_sightings(
+            vec![
+                s("stale", "2026-10-15T09:59:59Z"),
+                s("edge", "2026-10-15T10:00:00Z"),
+                s("fresh", "2026-10-15T11:00:00.25Z"),
+            ],
+            cutoff,
+        )
+        .unwrap();
+        let txids: Vec<_> = fresh.iter().map(|s| s.txid.as_str()).collect();
+        assert_eq!(txids, ["edge", "fresh"]);
+        let facts = aggregate(1, &[], &fresh, &Default::default(), 100);
+        assert_eq!(facts[0].status_facts.mempool_zat, 20);
+        assert!(fresh_sightings(vec![s("bad", "t")], cutoff).is_err());
     }
 
     #[test]

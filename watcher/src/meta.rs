@@ -203,6 +203,40 @@ impl MetaStore {
         Ok(())
     }
 
+    /// Deletes sightings first seen before `cutoff`; returns how many were removed.
+    /// Timestamps are compared as instants (RFC 3339 text does not sort reliably).
+    pub fn prune_sightings_older_than(
+        &self,
+        cutoff: OffsetDateTime,
+    ) -> Result<usize, WatcherError> {
+        let conn = self.conn();
+        let rows: Vec<(String, String, u32, String)> = {
+            let mut st = conn
+                .prepare(
+                    "SELECT txid, tab_id, participant_index, first_seen_at FROM mempool_sightings",
+                )
+                .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+            let rows = st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .map_err(|e| WatcherError::Wallet(e.to_string()))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+            rows
+        };
+        let mut removed = 0;
+        for (txid, tab_id, index, seen) in rows {
+            if parse_rfc3339(&seen)? < cutoff {
+                removed += conn
+                    .execute(
+                        "DELETE FROM mempool_sightings WHERE txid = ?1 AND tab_id = ?2 AND participant_index = ?3",
+                        params![txid, tab_id, index],
+                    )
+                    .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+            }
+        }
+        Ok(removed)
+    }
+
     pub fn transparent_source(&self, txid: &str) -> Result<Option<bool>, WatcherError> {
         self.conn()
             .query_row(
@@ -266,6 +300,18 @@ fn parse_uuid(field: &str, s: &str) -> Result<Uuid, WatcherError> {
         .map_err(|e| WatcherError::Wallet(format!("stored {field} is not a valid uuid: {e}")))
 }
 
+/// Blocks after which an unmined transaction can no longer be mined: the default expiry
+/// delta wallets set after NU7 (`expiry_height = target_height + 120`). A sighting older
+/// than this many block intervals belongs to a transaction that expired, was evicted or was
+/// replaced, so it is no longer a mempool fact.
+pub const SIGHTING_EXPIRY_BLOCKS: u64 = 120;
+
+/// Sightings first seen before the returned instant are stale.
+pub fn sighting_cutoff(now: OffsetDateTime, block_interval_seconds: u64) -> OffsetDateTime {
+    let secs = SIGHTING_EXPIRY_BLOCKS.saturating_mul(block_interval_seconds);
+    now - time::Duration::seconds(i64::try_from(secs).unwrap_or(i64::MAX / 2))
+}
+
 pub fn rfc3339(t: OffsetDateTime) -> Result<String, WatcherError> {
     t.format(&time::format_description::well_known::Rfc3339)
         .map_err(|e| WatcherError::Wallet(format!("format timestamp: {e}")))
@@ -327,6 +373,41 @@ mod tests {
         assert_eq!(got[0].value_zat, 600);
         assert_eq!(got[0].first_seen_at, s.first_seen_at);
         assert!(store.sightings_for_tab(b).unwrap().is_empty());
+    }
+
+    #[test]
+    fn prune_removes_only_sightings_older_than_cutoff() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let tab = Uuid::new_v4();
+        let at = |txid: &str, seen: &str| Sighting {
+            txid: txid.into(),
+            participant_index: 0,
+            value_zat: 1,
+            first_seen_at: seen.into(),
+        };
+        store
+            .upsert_sighting(&at("old", "2026-01-01T00:00:00Z"), tab)
+            .unwrap();
+        // Fractional seconds sort before 'Z' as text; compared as instants this is newer.
+        store
+            .upsert_sighting(&at("fresh", "2026-01-01T01:00:00.5Z"), tab)
+            .unwrap();
+        let cutoff = parse_rfc3339("2026-01-01T01:00:00Z").unwrap();
+        assert_eq!(store.prune_sightings_older_than(cutoff).unwrap(), 1);
+        let left = store.sightings_for_tab(tab).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].txid, "fresh");
+        assert_eq!(store.prune_sightings_older_than(cutoff).unwrap(), 0);
+    }
+
+    #[test]
+    fn sighting_cutoff_is_expiry_blocks_of_intervals_ago() {
+        let now = parse_rfc3339("2026-10-15T12:00:00Z").unwrap();
+        assert_eq!(
+            sighting_cutoff(now, 75),
+            now - time::Duration::seconds(120 * 75)
+        );
     }
 
     #[test]

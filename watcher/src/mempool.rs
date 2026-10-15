@@ -33,27 +33,49 @@ pub struct MempoolPass {
     pub matched: usize,
 }
 
+/// A pass shorter than this did not last until a plausible new block: the server or a
+/// proxy closed the stream right away, so the next subscription is delayed like a failure.
+const MIN_HEALTHY_PASS: Duration = Duration::from_secs(2);
+const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Pacing between passes: returns `(sleep before the next pass, next backoff)`.
+/// A pass that ended normally after at least `MIN_HEALTHY_PASS` resubscribes at once and
+/// resets the backoff; a failed or instantly-ended pass sleeps `backoff` and doubles it, so
+/// a server that keeps closing the stream is never hammered with fresh TLS connections.
+pub fn pace(ok: bool, pass_duration: Duration, backoff: Duration) -> (Duration, Duration) {
+    if ok && pass_duration >= MIN_HEALTHY_PASS {
+        (Duration::ZERO, INITIAL_BACKOFF)
+    } else {
+        (backoff, (backoff * 2).min(MAX_BACKOFF))
+    }
+}
+
 /// Runs mempool passes forever. lightwalletd ends the stream at every new block, so an
-/// ended stream means "resubscribe" immediately; errors and panics resubscribe after an
-/// exponential backoff.
+/// ended stream always means "resubscribe" (never "mempool empty"); errors, panics and
+/// streams that end instantly resubscribe after an exponential backoff (see [`pace`]).
 pub async fn run_mempool_loop(state: AppState) -> ! {
-    let mut backoff = Duration::from_secs(1);
+    let mut backoff = INITIAL_BACKOFF;
     loop {
         let s = state.clone();
-        match crate::sync::catch_panics(async move { mempool_pass(&s).await }).await {
+        let started = tokio::time::Instant::now();
+        let ok = match crate::sync::catch_panics(async move { mempool_pass(&s).await }).await {
             Ok(p) => {
                 tracing::debug!(
                     seen = p.seen,
                     matched = p.matched,
                     "mempool stream ended; resubscribing"
                 );
-                backoff = Duration::from_secs(1);
+                true
             }
             Err(e) => {
                 tracing::warn!(error = %e, "mempool stream failed; resubscribing after backoff");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(MAX_BACKOFF);
+                false
             }
+        };
+        let (sleep, next) = pace(ok, started.elapsed(), backoff);
+        backoff = next;
+        if !sleep.is_zero() {
+            tokio::time::sleep(sleep).await;
         }
     }
 }
@@ -106,6 +128,13 @@ pub async fn mempool_pass(state: &AppState) -> Result<MempoolPass, WatcherError>
             }
             Err(e) => return Err(e),
         }
+    }
+    // Sightings of transactions that can no longer be mined are not mempool facts.
+    let cutoff =
+        crate::meta::sighting_cutoff(OffsetDateTime::now_utc(), state.cfg.block_interval_seconds);
+    let pruned = state.meta.prune_sightings_older_than(cutoff)?;
+    if pruned > 0 {
+        tracing::debug!(pruned, "pruned stale mempool sightings");
     }
     Ok(pass)
 }
@@ -207,4 +236,35 @@ pub fn record_sightings(
         tracing::debug!(txid = %txid, "mempool sighting recorded");
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pace_resubscribes_at_once_after_a_normal_pass() {
+        let (sleep, next) = pace(true, Duration::from_secs(40), Duration::from_secs(16));
+        assert_eq!(sleep, Duration::ZERO);
+        assert_eq!(next, INITIAL_BACKOFF);
+    }
+
+    #[test]
+    fn pace_backs_off_on_instantly_ended_streams() {
+        let mut backoff = INITIAL_BACKOFF;
+        let mut sleeps = Vec::new();
+        for _ in 0..8 {
+            let (sleep, next) = pace(true, Duration::from_millis(50), backoff);
+            sleeps.push(sleep.as_secs());
+            backoff = next;
+        }
+        assert_eq!(sleeps, [1, 2, 4, 8, 16, 32, 60, 60]);
+    }
+
+    #[test]
+    fn pace_backs_off_on_errors_however_long_the_pass() {
+        let (sleep, next) = pace(false, Duration::from_secs(300), Duration::from_secs(4));
+        assert_eq!(sleep, Duration::from_secs(4));
+        assert_eq!(next, Duration::from_secs(8));
+    }
 }
