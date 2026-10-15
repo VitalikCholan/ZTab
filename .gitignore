@@ -1,0 +1,19 @@
+# build outputs
+target/
+node_modules/
+dist/
+build/
+*.wasm
+# secrets and wallets
+*.env
+.env.*
+identity.txt
+mnemonic.txt
+*.pczt
+wallets/
+*.sqlite
+*.db
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
