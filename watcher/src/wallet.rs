@@ -1,19 +1,23 @@
 use crate::{config::Config, error::WatcherError, remote::LwdClient, rng::OsRng};
+use rusqlite::OptionalExtension;
 use std::{
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
 };
 use uuid::Uuid;
 use zcash_client_backend::{
-    data_api::{chain::ChainState, Account, AccountBirthday, AccountPurpose, WalletWrite},
+    data_api::{
+        chain::ChainState, Account, AccountBirthday, AccountPurpose, WalletRead, WalletWrite,
+    },
     proto::service,
 };
 use zcash_client_sqlite::{
-    chain::init::init_blockmeta_db, util::SystemClock, wallet::init::init_wallet_db, AccountUuid,
-    FsBlockDb, WalletDb,
+    chain::init::init_blockmeta_db, error::SqliteClientError, util::SystemClock,
+    wallet::init::init_wallet_db, AccountUuid, FsBlockDb, WalletDb,
 };
-use zcash_keys::keys::UnifiedFullViewingKey;
+use zcash_keys::keys::{ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey};
 use zcash_protocol::consensus::{BlockHeight, Network, NetworkUpgrade, Parameters};
+use zip32::DiversifierIndex;
 
 pub type Db = WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>;
 
@@ -21,6 +25,7 @@ pub struct WalletStore {
     network: Network,
     db: Mutex<Db>,
     cache: Mutex<FsBlockDb>,
+    read: Mutex<rusqlite::Connection>,
     blocks_dir: PathBuf,
 }
 
@@ -41,10 +46,16 @@ impl WalletStore {
         )
         .map_err(|e| WatcherError::Wallet(format!("{e:?}")))?;
         init_wallet_db(&mut db, None).map_err(|e| WatcherError::Wallet(format!("{e:?}")))?;
+        let read = rusqlite::Connection::open_with_flags(
+            cfg.data_dir.join("wallet.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| WatcherError::Wallet(format!("read connection: {e}")))?;
         Ok(Self {
             network: cfg.network,
             db: Mutex::new(db),
             cache: Mutex::new(cache),
+            read: Mutex::new(read),
             blocks_dir: blocks_root.join("blocks"),
         })
     }
@@ -57,6 +68,10 @@ impl WalletStore {
     }
     pub fn cache(&self) -> MutexGuard<'_, FsBlockDb> {
         self.cache.lock().unwrap()
+    }
+    /// Read-only connection to the wallet database for raw SELECTs on the wallet schema.
+    pub fn read_conn(&self) -> MutexGuard<'_, rusqlite::Connection> {
+        self.read.lock().unwrap()
     }
     pub fn blocks_dir(&self) -> &Path {
         &self.blocks_dir
@@ -105,5 +120,99 @@ impl WalletStore {
             )
             .map_err(|e| WatcherError::Wallet(format!("import_account_ufvk: {e:?}")))?;
         Ok(account.id())
+    }
+
+    /// Orchard-only unified addresses for diversifier indices `0..count`; persisted in the
+    /// wallet's `addresses` table so received notes carry an `address_id`.
+    pub fn participant_addresses(
+        &self,
+        account: AccountUuid,
+        count: u32,
+    ) -> Result<Vec<(u32, String)>, WatcherError> {
+        let request = UnifiedAddressRequest::custom(
+            ReceiverRequirement::Require,
+            ReceiverRequirement::Omit,
+            ReceiverRequirement::Omit,
+        )
+        .map_err(|e| WatcherError::Wallet(format!("address request: {e:?}")))?;
+        let mut db = self.db();
+        let mut out = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let idx = DiversifierIndex::from(i);
+            let ua = match db.get_address_for_index(account, idx, request) {
+                Ok(Some(ua)) => ua,
+                Ok(None) => {
+                    return Err(WatcherError::Wallet(format!(
+                        "no orchard address at index {i}"
+                    )))
+                }
+                // The wallet already stores a different (full-receiver) address at this
+                // index, e.g. the default address created on import. Its row supplies the
+                // address_id; the Orchard-only form is derived from the UFVK directly.
+                Err(SqliteClientError::DiversifierIndexReuse(..)) => {
+                    let ufvk = db
+                        .get_account(account)
+                        .map_err(|e| WatcherError::Wallet(format!("get_account: {e:?}")))?
+                        .and_then(|a| a.ufvk().cloned())
+                        .ok_or_else(|| WatcherError::Wallet("account has no UFVK".into()))?;
+                    ufvk.address(idx, request).map_err(|e| {
+                        WatcherError::Wallet(format!("derive address at index {i}: {e:?}"))
+                    })?
+                }
+                Err(e) => {
+                    return Err(WatcherError::Wallet(format!(
+                        "get_address_for_index({i}): {e:?}"
+                    )))
+                }
+            };
+            out.push((i, ua.encode(&self.network)));
+        }
+        Ok(out)
+    }
+
+    pub fn index_for_address_id(&self, address_id: i64) -> Result<Option<u32>, WatcherError> {
+        let conn = self.read_conn();
+        let be: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT diversifier_index_be FROM addresses WHERE id = ?1",
+                [address_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        be.map(|b| {
+            index_from_be(&b)
+                .ok_or_else(|| WatcherError::Wallet("diversifier index out of u32 range".into()))
+        })
+        .transpose()
+    }
+}
+
+/// Decodes an 11-byte big-endian diversifier index; `None` if malformed or above `u32::MAX`.
+fn index_from_be(b: &[u8]) -> Option<u32> {
+    let n: [u8; 11] = b.try_into().ok()?;
+    if n[..7].iter().any(|&x| x != 0) {
+        return None;
+    }
+    Some(u32::from_be_bytes([n[7], n[8], n[9], n[10]]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_from_be;
+
+    #[test]
+    fn decodes_big_endian_index() {
+        let mut b = [0u8; 11];
+        assert_eq!(index_from_be(&b), Some(0));
+        b[10] = 5;
+        assert_eq!(index_from_be(&b), Some(5));
+        b[9] = 1;
+        assert_eq!(index_from_be(&b), Some(261));
+        b[7] = 0xff;
+        assert_eq!(index_from_be(&b), Some(0xff00_0105));
+        b[6] = 1;
+        assert_eq!(index_from_be(&b), None);
+        assert_eq!(index_from_be(&[0u8; 10]), None);
     }
 }
