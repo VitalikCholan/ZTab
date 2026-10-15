@@ -65,27 +65,21 @@ pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterTab>,
 ) -> Result<(StatusCode, Json<RegisterOut>), WatcherError> {
-    if let Some(existing) = state.meta.get_tab(body.tab_id)? {
-        if existing.ufvk != body.ufvk {
-            return Err(WatcherError::Conflict(
-                "tab_id already registered with a different ufvk".into(),
-            ));
-        }
-        let account = crate::wallet::account_uuid(existing.account_uuid);
-        let addresses = state
-            .wallet
-            .participant_addresses(account, existing.participants_count)?;
-        return Ok(out(body.tab_id, addresses));
+    if let Some(resp) = existing_registration(&state, &body)? {
+        return Ok(resp);
     }
     state.wallet.parse_ufvk(&body.ufvk)?;
     let mut client = state.client.lock().await;
+    // The client lock serializes registrations: re-check now that we hold it.
+    if let Some(resp) = existing_registration(&state, &body)? {
+        return Ok(resp);
+    }
     let (tip, _) = remote::latest_height(&mut client).await?;
     validate_register(&body, u32::from(tip))?;
     let account = state
         .wallet
         .import_tab_account(&mut client, body.tab_id, &body.ufvk, body.birthday)
         .await?;
-    drop(client);
     state.meta.insert_tab(&TabRow {
         tab_id: body.tab_id,
         account_uuid: account.expose_uuid(),
@@ -95,11 +89,31 @@ pub async fn register(
         state: TabState::Open,
         created_at: time::OffsetDateTime::now_utc(),
     })?;
+    drop(client);
     let addresses = state
         .wallet
         .participant_addresses(account, body.participants_count)?;
     tracing::info!(tab = %body.tab_id, participants = body.participants_count, "tab registered");
     Ok(out(body.tab_id, addresses))
+}
+
+fn existing_registration(
+    state: &AppState,
+    body: &RegisterTab,
+) -> Result<Option<(StatusCode, Json<RegisterOut>)>, WatcherError> {
+    let Some(existing) = state.meta.get_tab(body.tab_id)? else {
+        return Ok(None);
+    };
+    if existing.ufvk != body.ufvk {
+        return Err(WatcherError::Conflict(
+            "tab_id already registered with a different ufvk".into(),
+        ));
+    }
+    let account = crate::wallet::account_uuid(existing.account_uuid);
+    let addresses = state
+        .wallet
+        .participant_addresses(account, existing.participants_count)?;
+    Ok(Some(out(body.tab_id, addresses)))
 }
 
 pub async fn get_tab(

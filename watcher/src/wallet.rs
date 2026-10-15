@@ -92,6 +92,14 @@ impl WalletStore {
         birthday: u32,
     ) -> Result<AccountUuid, WatcherError> {
         let ufvk = self.parse_ufvk(ufvk)?;
+        // Retry after a crash between import and tab insert: reuse the existing account.
+        if let Some(existing) = self
+            .db()
+            .get_account_for_ufvk(&ufvk)
+            .map_err(|e| WatcherError::Wallet(format!("get_account_for_ufvk: {e:?}")))?
+        {
+            return Ok(existing.id());
+        }
         let sapling = self
             .network
             .activation_height(NetworkUpgrade::Sapling)

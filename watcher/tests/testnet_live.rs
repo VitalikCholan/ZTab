@@ -180,3 +180,51 @@ async fn register_rejects_ufvk_change() {
     changed.replace_range(hrp_end..hrp_end + 1, if c == b'q' { "p" } else { "q" });
     assert_eq!(send(changed).await.unwrap().status(), 409);
 }
+
+#[tokio::test]
+#[ignore]
+async fn register_recovers_from_import_without_tab_row() {
+    let (state, addr) = common::spawn_state_and_server().await;
+    let birthday = recent_birthday(&state).await;
+    let tab_id = uuid::Uuid::new_v4();
+    {
+        // Simulates a crash between import_tab_account and insert_tab.
+        let mut client = state.client.lock().await;
+        state
+            .wallet
+            .import_tab_account(&mut client, tab_id, common::FIXTURE_UFVK, birthday)
+            .await
+            .unwrap();
+    }
+    let r = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/tabs"))
+        .header("Authorization", "Bearer test-token")
+        .json(&register_body(tab_id, common::FIXTURE_UFVK, birthday, 3))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+    let j: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(j["addresses"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+#[ignore]
+async fn concurrent_registers_of_same_tab_are_idempotent() {
+    let (state, addr) = common::spawn_state_and_server().await;
+    let birthday = recent_birthday(&state).await;
+    let tab_id = uuid::Uuid::new_v4();
+    let http = reqwest::Client::new();
+    let send = || {
+        http.post(format!("http://{addr}/v1/tabs"))
+            .header("Authorization", "Bearer test-token")
+            .json(&register_body(tab_id, common::FIXTURE_UFVK, birthday, 3))
+            .send()
+    };
+    let (a, b) = tokio::join!(send(), send());
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!((a.status().as_u16(), b.status().as_u16()), (201, 201));
+    let (ja, jb): (serde_json::Value, serde_json::Value) =
+        (a.json().await.unwrap(), b.json().await.unwrap());
+    assert_eq!(ja["addresses"], jb["addresses"]);
+}
