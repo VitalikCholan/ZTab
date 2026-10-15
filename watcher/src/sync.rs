@@ -1,9 +1,9 @@
 //! Block sync: subtree roots, chain tip, compact-block download and scanning, reorg rewind.
 //! A port of zcash-devtool `commands/wallet/sync.rs` without the TUI and UTXO refresh.
 //!
-//! Locking: `sync_once` holds the tokio `client` lock for the whole block pass; wallet
-//! `db()`/`cache()` and meta mutexes are only taken inside synchronous helpers that return
-//! before the next `.await`.
+//! Locking: `sync_once` holds the tokio `client` lock for the whole block pass
+//! (`sync_wallet`); wallet `db()`/`cache()` and meta mutexes are only taken inside
+//! synchronous helpers that return before the next `.await`.
 
 use std::{path::Path, sync::atomic::Ordering, time::Duration};
 
@@ -29,8 +29,9 @@ use zcash_transparent::bundle::{Authorization, Bundle};
 
 use crate::{
     error::WatcherError,
-    http::AppState,
+    http::{AppState, HealthState},
     remote::{self, LwdClient},
+    wallet::WalletStore,
 };
 
 /// Blocks downloaded and scanned per batch.
@@ -126,18 +127,29 @@ where
 }
 
 pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
-    let mut client = state.client.lock().await;
+    let report = {
+        let mut client = state.client.lock().await;
+        sync_wallet(&state.wallet, &mut client, &state.health).await?
+    };
+    refresh_transparent_sources_for_open_tabs(state).await?;
+    Ok(report)
+}
 
-    let (tip, tip_hash) = remote::latest_height(&mut client).await?;
-    state
-        .health
-        .tip_height
-        .store(u32::from(tip), Ordering::Relaxed);
+/// One block pass for `wallet`: tip, subtree roots, download and scan of every suggested
+/// range, reorg rewinds; records tip and synced height in `health`. The core of
+/// `sync_once`, reusable for any wallet (the live tests sync their payer wallet with it).
+pub async fn sync_wallet(
+    wallet: &WalletStore,
+    client: &mut LwdClient,
+    health: &HealthState,
+) -> Result<SyncReport, WatcherError> {
+    let (tip, tip_hash) = remote::latest_height(client).await?;
+    health.tip_height.store(u32::from(tip), Ordering::Relaxed);
     // Without accounts the wallet has no birthday, and `update_chain_tip` would queue
     // everything above the last completed shard (~400k testnet blocks). Nothing to watch
     // means nothing to scan: the first imported tab's birthday bounds the first scan.
-    if !wallet_has_accounts(state)? {
-        mark_synced(state, u32::from(tip));
+    if !wallet_has_accounts(wallet)? {
+        mark_synced(health, u32::from(tip));
         return Ok(SyncReport {
             tip: u32::from(tip),
             scanned_to: u32::from(tip),
@@ -145,13 +157,13 @@ pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
         });
     }
 
-    update_subtree_roots(&mut client, state).await?;
-    let mut rewound_to = apply_chain_tip(state, tip, tip_hash)?;
+    update_subtree_roots(client, wallet).await?;
+    let mut rewound_to = apply_chain_tip(wallet, tip, tip_hash)?;
 
     let mut rewinds = 0u32;
     let mut batches = 0u32;
     loop {
-        let Some(range) = next_batch(state)? else {
+        let Some(range) = next_batch(wallet)? else {
             break;
         };
         batches += 1;
@@ -160,11 +172,11 @@ pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
                 "scan queue did not drain within the batch limit".into(),
             ));
         }
-        let metas = download_blocks(&mut client, state, &range).await?;
-        let chain_state = download_chain_state(&mut client, range.block_range().start - 1).await?;
-        let outcome = scan_batch(state, &chain_state, &range, tip);
+        let metas = download_blocks(client, wallet, &range).await?;
+        let chain_state = download_chain_state(client, range.block_range().start - 1).await?;
+        let outcome = scan_batch(wallet, &chain_state, &range, tip);
         // Scanned (or rejected) blocks are not needed on disk any more either way.
-        delete_cached_blocks(state.wallet.blocks_dir(), &metas).await;
+        delete_cached_blocks(wallet.blocks_dir(), &metas).await;
         if let ScanOutcome::Rewound(h) = outcome? {
             rewinds += 1;
             rewound_to = Some(u32::from(h));
@@ -176,14 +188,12 @@ pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
         }
     }
 
-    let scanned_to = state
-        .wallet
+    let scanned_to = wallet
         .db()
         .block_fully_scanned()
         .map_err(|e| werr("block_fully_scanned", e))?
         .map_or(0, |m| u32::from(m.block_height()));
-    mark_synced(state, scanned_to);
-    drop(client);
+    mark_synced(health, scanned_to);
     if batches > 0 || rewound_to.is_some() {
         tracing::info!(
             tip = u32::from(tip),
@@ -194,7 +204,6 @@ pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
         );
     }
 
-    refresh_transparent_sources_for_open_tabs(state).await?;
     Ok(SyncReport {
         tip: u32::from(tip),
         scanned_to,
@@ -202,21 +211,17 @@ pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
     })
 }
 
-fn wallet_has_accounts(state: &AppState) -> Result<bool, WatcherError> {
-    Ok(!state
-        .wallet
+fn wallet_has_accounts(wallet: &WalletStore) -> Result<bool, WatcherError> {
+    Ok(!wallet
         .db()
         .get_account_ids()
         .map_err(|e| werr("get_account_ids", e))?
         .is_empty())
 }
 
-fn mark_synced(state: &AppState, scanned_to: u32) {
-    state
-        .health
-        .synced_height
-        .store(scanned_to, Ordering::Relaxed);
-    if let Ok(mut t) = state.health.last_ok_at.lock() {
+fn mark_synced(health: &HealthState, scanned_to: u32) {
+    health.synced_height.store(scanned_to, Ordering::Relaxed);
+    if let Ok(mut t) = health.last_ok_at.lock() {
         *t = Some(time::OffsetDateTime::now_utc());
     }
 }
@@ -225,7 +230,7 @@ fn mark_synced(state: &AppState, scanned_to: u32) {
 /// wallet can scan out of order and skip shards with no relevant notes.
 async fn update_subtree_roots(
     client: &mut LwdClient,
-    state: &AppState,
+    wallet: &WalletStore,
 ) -> Result<(), WatcherError> {
     let sapling = fetch_subtree_roots(client, service::ShieldedProtocol::Sapling)
         .await?
@@ -247,7 +252,7 @@ async fn update_subtree_roots(
         ironwood = ironwood.len(),
         "subtree roots"
     );
-    let mut db = state.wallet.db();
+    let mut db = wallet.db();
     db.put_sapling_subtree_roots(0, &sapling)
         .map_err(|e| werr("put_sapling_subtree_roots", e))?;
     db.put_orchard_subtree_roots(0, &orchard)
@@ -297,11 +302,11 @@ fn orchard_roots(
 /// hash differs from ours at that height, the chain was rolled back: rewind (devtool logic;
 /// a lagging node with matching history is not a reorg and is left alone).
 fn apply_chain_tip(
-    state: &AppState,
+    wallet: &WalletStore,
     tip: BlockHeight,
     tip_hash: BlockHash,
 ) -> Result<Option<u32>, WatcherError> {
-    let mut db = state.wallet.db();
+    let mut db = wallet.db();
     db.update_chain_tip(tip)
         .map_err(|e| werr("update_chain_tip", e))?;
     let Some(max_scanned) = db
@@ -323,24 +328,16 @@ fn apply_chain_tip(
             requested = u32::from(requested),
             "chain tip diverges from scanned history; rewinding"
         );
-        let cache = state.wallet.cache();
-        let h = rewind(
-            &mut db,
-            &cache,
-            state.wallet.blocks_dir(),
-            tip,
-            requested,
-            tip,
-        )?;
+        let cache = wallet.cache();
+        let h = rewind(&mut db, &cache, wallet.blocks_dir(), tip, requested, tip)?;
         return Ok(Some(u32::from(h)));
     }
     Ok(None)
 }
 
 /// The highest-priority suggested range, limited to `BATCH_SIZE` blocks.
-fn next_batch(state: &AppState) -> Result<Option<ScanRange>, WatcherError> {
-    let ranges = state
-        .wallet
+fn next_batch(wallet: &WalletStore) -> Result<Option<ScanRange>, WatcherError> {
+    let ranges = wallet
         .db()
         .suggest_scan_ranges()
         .map_err(|e| werr("suggest_scan_ranges", e))?;
@@ -352,7 +349,7 @@ fn next_batch(state: &AppState) -> Result<Option<ScanRange>, WatcherError> {
 
 async fn download_blocks(
     client: &mut LwdClient,
-    state: &AppState,
+    wallet: &WalletStore,
     range: &ScanRange,
 ) -> Result<Vec<BlockMeta>, WatcherError> {
     tracing::debug!(
@@ -376,7 +373,7 @@ async fn download_blocks(
         .await
         .map_err(|e| rerr("get_block_range", e))?
         .into_inner();
-    let blocks_dir = state.wallet.blocks_dir();
+    let blocks_dir = wallet.blocks_dir();
     let mut metas = Vec::with_capacity(range.len());
     while let Some(block) = stream
         .try_next()
@@ -407,8 +404,7 @@ async fn download_blocks(
             range.len()
         )));
     }
-    state
-        .wallet
+    wallet
         .cache()
         .write_block_metadata(&metas)
         .map_err(|e| werr("write_block_metadata", e))?;
@@ -474,14 +470,14 @@ enum ScanOutcome {
 }
 
 fn scan_batch(
-    state: &AppState,
+    wallet: &WalletStore,
     chain_state: &ChainState,
     range: &ScanRange,
     tip: BlockHeight,
 ) -> Result<ScanOutcome, WatcherError> {
-    let network = state.wallet.network();
-    let mut db = state.wallet.db();
-    let cache = state.wallet.cache();
+    let network = wallet.network();
+    let mut db = wallet.db();
+    let cache = wallet.cache();
     match scan_cached_blocks(
         &network,
         &*cache,
@@ -499,14 +495,7 @@ fn scan_batch(
                 requested = u32::from(requested),
                 "chain reorg detected; rewinding"
             );
-            let h = rewind(
-                &mut db,
-                &cache,
-                state.wallet.blocks_dir(),
-                at,
-                requested,
-                tip,
-            )?;
+            let h = rewind(&mut db, &cache, wallet.blocks_dir(), at, requested, tip)?;
             Ok(ScanOutcome::Rewound(h))
         }
         Err(e) => Err(werr("scan_cached_blocks", e)),

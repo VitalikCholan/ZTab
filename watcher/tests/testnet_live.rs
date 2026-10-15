@@ -803,3 +803,270 @@ async fn get_tab_is_served_from_db_when_offline() {
     assert!(j["lag_seconds"].is_number());
     assert!(j["tip_height"].as_u64().unwrap() > 0);
 }
+
+/// Prints the fixture payer's address for `ZTAB_TEST_SEED_HEX` (to fund it at the faucet);
+/// see `tests/fixtures/README.md`. Offline, but ignored because it needs the env var.
+#[test]
+#[ignore = "needs ZTAB_TEST_SEED_HEX"]
+fn fixture_payer_address() {
+    let Some(seed_hex) = common::test_seed_hex() else {
+        return;
+    };
+    let network = zcash_protocol::consensus::Network::TestNetwork;
+    let usk = common::payer_usk(&seed_hex, &network);
+    println!("payer address: {}", common::payer_address(&usk, &network));
+}
+
+/// The spec's success criterion, end to end on public testnet: a tab is registered with a
+/// browser-made UFVK, a participant pays from a real wallet, the watcher reports the payment
+/// in the mempool within 60 s, then mined, "paid" at 3 confirmations and sweepable at 10;
+/// the watcher proves the sweep, the test signs it as the browser will, the watcher
+/// broadcasts it and the sweep is mined. Needs a funded payer (`tests/fixtures/README.md`)
+/// and 8–15 minutes:
+/// `ZTAB_TEST_SEED_HEX=… cargo test --test testnet_live full_tab_lifecycle -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "needs ZTAB_TEST_SEED_HEX with >= 0.05 TAZ and ~12 minutes"]
+async fn full_tab_lifecycle_on_testnet() {
+    use std::time::{Duration, Instant};
+    const PAYMENT_ZAT: u64 = 2_000_000;
+    let started = Instant::now();
+    let Some(seed_hex) = common::test_seed_hex() else {
+        return;
+    };
+    let (state, addr) = common::spawn_state_and_server().await;
+    let mut timings: Vec<(&str, Duration)> = vec![];
+    let network = state.cfg.network;
+
+    // The service's mempool loop, subscribed before the payment goes out.
+    tokio::spawn(ztab_watcher::mempool::run_mempool_loop(state.clone()));
+
+    // 1. Alice's browser: random tab seed -> USK -> UFVK (what the WASM module will do).
+    let mut tab_seed = [0u8; 32];
+    let mut rng = ztab_watcher::rng::OsRng;
+    rand::Rng::fill_bytes(&mut rng, &mut tab_seed);
+    let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(
+        &network,
+        &tab_seed,
+        zip32::AccountId::ZERO,
+    )
+    .unwrap();
+    let ufvk = usk.to_unified_full_viewing_key().encode(&network).unwrap();
+    let tip = common::tip(&state).await;
+    let tab_id = uuid::Uuid::new_v4();
+    let reg = common::post(&addr, "/v1/tabs", register_body(tab_id, &ufvk, tip, 2)).await;
+    assert_eq!(reg.status(), 201);
+    let addresses: Vec<String> = reg.json::<serde_json::Value>().await.unwrap()["addresses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["address"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(addresses.len(), 2);
+    ztab_watcher::sync::sync_once(&state).await.unwrap();
+    eprintln!("tab {tab_id} registered at birthday {tip}");
+
+    // 2. Participant 1 pays 0.02 TAZ from the fixture wallet.
+    let payer = common::FixtureWallet::restore(&seed_hex, &state.cfg).await;
+    let (total, mut spendable) = payer.balance_zat();
+    eprintln!(
+        "payer {} balance: total {total} zat, spendable {spendable} zat",
+        payer.address()
+    );
+    assert!(
+        total >= PAYMENT_ZAT + 100_000,
+        "the fixture payer needs >= 0.021 TAZ; refill it (tests/fixtures/README.md)"
+    );
+    // A fresh faucet note needs 10 confirmations before it can be spent.
+    let wait_funds = Instant::now();
+    while spendable < PAYMENT_ZAT + 100_000 {
+        assert!(
+            wait_funds.elapsed() < Duration::from_secs(600),
+            "payer funds did not mature within 10 minutes"
+        );
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        payer.sync().await;
+        spendable = payer.balance_zat().1;
+    }
+    let mut ready = false;
+    for _ in 0..30 {
+        if state
+            .health
+            .mempool_subscribed
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(ready, "mempool stream did not subscribe");
+    let building = Instant::now();
+    let txid = payer.send(&addresses[1], PAYMENT_ZAT, "ztab e2e").await;
+    // Timings below count from the broadcast.
+    let sent_at = Instant::now();
+    timings.push(("payment built and sent", building.elapsed()));
+    eprintln!(
+        "payment {txid} broadcast ({:?} to sync, build and send)",
+        building.elapsed()
+    );
+
+    // 3. "In the mempool" within 60 s, from the mempool stream alone (no block sync).
+    loop {
+        let facts = common::get_tab(&addr, tab_id).await;
+        let p1 = &facts["participants"][1];
+        if p1["status_facts"]["mempool_zat"].as_u64().unwrap() == PAYMENT_ZAT {
+            assert_eq!(p1["payments"][0]["txid"], txid.as_str());
+            assert_eq!(facts["participants"][0]["status_facts"]["mempool_zat"], 0);
+            break;
+        }
+        assert_eq!(
+            p1["status_facts"]["confirmed_zat"], 0,
+            "payment {txid} was mined before the mempool sighting was reported"
+        );
+        assert!(
+            sent_at.elapsed() < Duration::from_secs(60),
+            "payment {txid} not seen in the mempool within 60 s: {facts}"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    timings.push(("mempool sighting", sent_at.elapsed()));
+    eprintln!("seen in mempool after {:?}", sent_at.elapsed());
+
+    // 4. Mined, then paid at 3 confirmations (the sweep is refused until 10), sweepable at 10.
+    let facts = common::wait_until(
+        &state,
+        &addr,
+        tab_id,
+        |f| f["participants"][1]["status_facts"]["confirmed_zat"] == PAYMENT_ZAT,
+        600,
+    )
+    .await;
+    timings.push(("mined", sent_at.elapsed()));
+    let p1 = &facts["participants"][1];
+    assert_eq!(p1["status_facts"]["mempool_zat"], 0);
+    assert_eq!(p1["payments"].as_array().unwrap().len(), 1);
+    assert_eq!(p1["status_facts"]["transparent_source"], false);
+    eprintln!(
+        "mined at {} after {:?}",
+        p1["payments"][0]["mined_height"],
+        sent_at.elapsed()
+    );
+    let mined_height = p1["payments"][0]["mined_height"].as_u64().unwrap();
+    common::wait_until(
+        &state,
+        &addr,
+        tab_id,
+        |f| {
+            f["participants"][1]["status_facts"]["best_confirmations"]
+                .as_u64()
+                .unwrap()
+                >= 3
+        },
+        600,
+    )
+    .await;
+    timings.push(("3 confirmations (paid)", sent_at.elapsed()));
+    eprintln!("paid (3 confirmations) after {:?}", sent_at.elapsed());
+    let (status, body) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/sweep"),
+        serde_json::json!({ "recipient_address": payer.address() }),
+    )
+    .await;
+    eprintln!("early sweep: {status} {body}");
+    assert_eq!(status, reqwest::StatusCode::CONFLICT);
+    common::wait_until(
+        &state,
+        &addr,
+        tab_id,
+        |f| {
+            f["participants"][1]["status_facts"]["best_confirmations"]
+                .as_u64()
+                .unwrap()
+                >= 10
+        },
+        900,
+    )
+    .await;
+    timings.push(("10 confirmations (sweepable)", sent_at.elapsed()));
+    eprintln!("10 confirmations after {:?}", sent_at.elapsed());
+
+    // 5. Sweep: the watcher proves, the test signs like the browser, the watcher broadcasts.
+    let offer = common::post(
+        &addr,
+        &format!("/v1/tabs/{tab_id}/sweep"),
+        serde_json::json!({"recipient_address": payer.address(), "memo": "ztab sweep"}),
+    )
+    .await;
+    assert_eq!(offer.status(), 200);
+    let offer: serde_json::Value = offer.json().await.unwrap();
+    let s = &offer["summary"];
+    eprintln!("sweep offer: {s}");
+    assert_eq!(s["inputs_zat"], PAYMENT_ZAT);
+    assert_eq!(
+        s["output_zat"].as_u64().unwrap() + s["fee_zat"].as_u64().unwrap(),
+        PAYMENT_ZAT
+    );
+    let sweep_txid = s["txid"].as_str().unwrap().to_string();
+    let signed_b64 = common::sign_like_browser(offer["pczt_b64"].as_str().unwrap(), &usk);
+    let bc = common::post(
+        &addr,
+        &format!("/v1/tabs/{tab_id}/broadcast"),
+        serde_json::json!({ "pczt_b64": signed_b64 }),
+    )
+    .await;
+    let bc_status = bc.status();
+    let bc_body: serde_json::Value = bc.json().await.unwrap_or_default();
+    eprintln!("broadcast: {bc_status} {bc_body}");
+    assert_eq!(bc_status, 200);
+    let swept_at = Instant::now();
+    assert_eq!(common::get_tab(&addr, tab_id).await["state"], "sweeping");
+    // A second sweep while this one is pending is refused.
+    let (status, _) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/sweep"),
+        serde_json::json!({ "recipient_address": payer.address() }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::CONFLICT);
+
+    // 6. The sweep is mined (`GET /sweep` reports its height; `closed` follows at 10).
+    let status = loop {
+        if let Err(e) = ztab_watcher::sync::sync_once(&state).await {
+            eprintln!("watcher sync pass failed (retrying): {e}");
+        }
+        let status = common::get(&addr, &format!("/v1/tabs/{tab_id}/sweep")).await;
+        assert_eq!(status["txid"], sweep_txid.as_str());
+        if status["mined_height"].is_u64() {
+            break status;
+        }
+        assert!(
+            swept_at.elapsed() < Duration::from_secs(600),
+            "sweep {sweep_txid} not mined within 10 minutes: {status}"
+        );
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    };
+    timings.push(("sweep mined (after broadcast)", swept_at.elapsed()));
+    eprintln!("sweep status: {status}");
+    assert!(status["mined_height"].as_u64().unwrap() > mined_height);
+    assert!(matches!(
+        status["state"].as_str(),
+        Some("sweeping" | "closed")
+    ));
+    // The funds are back in the payer's wallet.
+    payer.sync().await;
+    assert!(matches!(
+        payer.transaction_mined_height(&sweep_txid),
+        Some(Some(_))
+    ));
+    eprintln!(
+        "payer balance after the sweep: total {} zat",
+        payer.balance_zat().0
+    );
+
+    eprintln!("payment {txid}, sweep {sweep_txid}");
+    for (what, t) in &timings {
+        eprintln!("  {what}: {t:.1?}");
+    }
+    eprintln!("total wall time: {:.1?}", started.elapsed());
+}
