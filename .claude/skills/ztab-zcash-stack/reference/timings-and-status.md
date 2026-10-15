@@ -23,3 +23,14 @@
 
 ## Mempool stream semantics (lightwallet protocol, not re-measured)
 `GetMempoolStream` streams current mempool transactions and **closes when a new block is mined**. The watcher must re-subscribe after every block (and after any transport error) and must treat a closed stream as "re-sync blocks, then re-subscribe", not as "mempool empty". Trial-decrypt each streamed tx with the tab's UFVK; a hit yields the participant's diversifier index.
+
+## Watcher end-to-end runs (2026-10-15/16, three runs of `full_tab_lifecycle_on_testnet`)
+| Event | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Payment seen in mempool after broadcast | 2.1 s | 2.0 s | 2.0 s |
+| Mined | 50.8 s | – | – |
+| 3 confirmations ("paid") | 83 s | – | 71.5 s |
+| 10 confirmations (sweepable) | 237 s | 163 s | 204 s |
+| Sweep mined after broadcast | 21 s | – | 79 s |
+| Whole scenario | 302 s | 276 s | 329 s |
+Blocks ran 25–35 s apart; plan for "paid" at ~1.5 min and "sweepable" at ~3–4 min on testnet. A tab younger than ~10 blocks cannot build a sweep proposal yet (no anchor), so a `POST /sweep` right after registration is a 409 regardless of funds.
