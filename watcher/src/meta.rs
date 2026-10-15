@@ -56,6 +56,17 @@ pub struct Sighting {
     pub first_seen_at: String,
 }
 
+/// The sweep last offered for a tab (one row per tab).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SweepRow {
+    pub tab_id: Uuid,
+    pub txid: String,
+    pub pczt_b64: String,
+    pub expiry_height: u32,
+    pub created_at: OffsetDateTime,
+    pub broadcast_at: Option<OffsetDateTime>,
+}
+
 pub struct MetaStore {
     conn: Mutex<Connection>,
 }
@@ -270,6 +281,64 @@ impl MetaStore {
             }
         }
         Ok(out)
+    }
+
+    /// Records `txid` as the tab's offered sweep, replacing any earlier offer.
+    pub fn put_sweep(
+        &self,
+        tab_id: Uuid,
+        txid: &str,
+        pczt_b64: &str,
+        expiry_height: u32,
+    ) -> Result<(), WatcherError> {
+        let created_at = rfc3339(OffsetDateTime::now_utc())?;
+        self.conn()
+            .execute(
+                "INSERT OR REPLACE INTO sweeps (tab_id, txid, pczt_b64, expiry_height, created_at, broadcast_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+                params![tab_id.to_string(), txid, pczt_b64, expiry_height, created_at],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_sweep(&self, tab_id: Uuid) -> Result<Option<SweepRow>, WatcherError> {
+        type Raw = (String, String, u32, String, Option<String>);
+        let raw: Option<Raw> = self
+            .conn()
+            .query_row(
+                "SELECT txid, pczt_b64, expiry_height, created_at, broadcast_at FROM sweeps WHERE tab_id = ?1",
+                params![tab_id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        raw.map(|(txid, pczt_b64, expiry_height, created, broadcast)| {
+            Ok(SweepRow {
+                tab_id,
+                txid,
+                pczt_b64,
+                expiry_height,
+                created_at: parse_rfc3339(&created)?,
+                broadcast_at: broadcast.as_deref().map(parse_rfc3339).transpose()?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Stamps the tab's offered sweep as broadcast now.
+    pub fn mark_broadcast(&self, tab_id: Uuid) -> Result<(), WatcherError> {
+        let now = rfc3339(OffsetDateTime::now_utc())?;
+        let n = self
+            .conn()
+            .execute(
+                "UPDATE sweeps SET broadcast_at = ?2 WHERE tab_id = ?1",
+                params![tab_id.to_string(), now],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        if n == 0 {
+            return Err(WatcherError::Wallet("no sweep to mark broadcast".into()));
+        }
+        Ok(())
     }
 
     pub fn open_tabs(&self) -> Result<Vec<TabRow>, WatcherError> {
@@ -527,5 +596,45 @@ mod tests {
             // Mutex must still be usable afterwards.
             store.conn().execute("DELETE FROM tabs", []).unwrap();
         }
+    }
+
+    #[test]
+    fn sweep_put_replaces_offer_and_mark_broadcast_stamps_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let tab = Uuid::new_v4();
+        assert_eq!(store.get_sweep(tab).unwrap(), None);
+        assert!(store.mark_broadcast(tab).is_err());
+        store.put_sweep(tab, "aa", "cA", 100).unwrap();
+        let first = store.get_sweep(tab).unwrap().unwrap();
+        assert_eq!(
+            (
+                first.txid.as_str(),
+                first.pczt_b64.as_str(),
+                first.expiry_height
+            ),
+            ("aa", "cA", 100)
+        );
+        assert_eq!(first.broadcast_at, None);
+        store.mark_broadcast(tab).unwrap();
+        assert!(store
+            .get_sweep(tab)
+            .unwrap()
+            .unwrap()
+            .broadcast_at
+            .is_some());
+        // A new offer replaces the old one, including its broadcast stamp.
+        store.put_sweep(tab, "bb", "cB", 200).unwrap();
+        let second = store.get_sweep(tab).unwrap().unwrap();
+        assert_eq!(
+            (
+                second.txid.as_str(),
+                second.expiry_height,
+                second.broadcast_at
+            ),
+            ("bb", 200, None)
+        );
+        // Rows are per tab.
+        assert_eq!(store.get_sweep(Uuid::new_v4()).unwrap(), None);
     }
 }

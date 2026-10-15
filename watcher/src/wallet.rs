@@ -267,6 +267,29 @@ impl WalletStore {
         Ok(index)
     }
 
+    /// The mined height of the wallet transaction with display-hex `txid`; `None` if it is
+    /// unknown or not mined.
+    pub fn mined_height_of(&self, txid: &str) -> Result<Option<u32>, WatcherError> {
+        let mut bytes =
+            hex::decode(txid).map_err(|e| WatcherError::Wallet(format!("txid hex: {e}")))?;
+        bytes.reverse();
+        let mined: Option<Option<i64>> = self
+            .read_conn()
+            .query_row(
+                "SELECT mined_height FROM transactions WHERE txid = ?1",
+                [bytes],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        mined
+            .flatten()
+            .map(|h| {
+                u32::try_from(h).map_err(|_| WatcherError::Wallet("mined height overflow".into()))
+            })
+            .transpose()
+    }
+
     pub fn index_for_address_id(&self, address_id: i64) -> Result<Option<u32>, WatcherError> {
         let conn = self.read_conn();
         let be: Option<Vec<u8>> = conn

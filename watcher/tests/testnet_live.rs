@@ -557,3 +557,164 @@ async fn mempool_loop_resubscribes_after_stream_end() {
         assert!(!state.health.mempool_subscribed.load(Ordering::Relaxed));
     }
 }
+
+async fn post_json(
+    addr: std::net::SocketAddr,
+    path: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let r = reqwest::Client::new()
+        .post(format!("http://{addr}{path}"))
+        .header("Authorization", "Bearer test-token")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = r.status();
+    (status, r.json().await.unwrap_or(serde_json::Value::Null))
+}
+
+/// A UFVK of a fresh random spending key: a tab that has never been paid.
+fn random_ufvk() -> String {
+    use zcash_keys::keys::UnifiedSpendingKey;
+    let mut seed = [0u8; 32];
+    seed[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    seed[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    let network = zcash_protocol::consensus::Network::TestNetwork;
+    UnifiedSpendingKey::from_seed(&network, &seed, zip32::AccountId::ZERO)
+        .unwrap()
+        .to_unified_full_viewing_key()
+        .encode(&network)
+        .unwrap()
+}
+
+/// A sweep destination unrelated to any tab: index 0 of the fixture account.
+const SWEEP_RECIPIENT: &str = "utest1079uezyzq3c5n7vx8244azpw2wdzevp2rxml8hcjv6qaxnysg9ug78j96ffwsmxqryfelsp5tgk77s8ezu4t8jkcl4s7l48xrgrudmtp";
+
+#[tokio::test]
+#[ignore]
+async fn sweep_rejects_when_notes_are_immature() {
+    let (state, addr) = common::spawn_state_and_server().await;
+    let birthday = recent_birthday(&state).await;
+    let tab_id = uuid::Uuid::new_v4();
+    let (status, _) = post_json(
+        addr,
+        "/v1/tabs",
+        register_body(tab_id, &random_ufvk(), birthday, 2),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::CREATED);
+    let (status, body) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/sweep"),
+        serde_json::json!({ "recipient_address": SWEEP_RECIPIENT }),
+    )
+    .await;
+    eprintln!("unsynced sweep: {status} {body}");
+    assert_eq!(status, reqwest::StatusCode::CONFLICT);
+    // Synced, the tab still has nothing spendable at the sweep depth.
+    ztab_watcher::sync::sync_once(&state).await.unwrap();
+    let (status, body) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/sweep"),
+        serde_json::json!({ "recipient_address": SWEEP_RECIPIENT }),
+    )
+    .await;
+    eprintln!("synced sweep: {status} {body}");
+    assert_eq!(status, reqwest::StatusCode::CONFLICT);
+    assert!(state.meta.get_sweep(tab_id).unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore]
+async fn broadcast_rejects_mismatched_pczt() {
+    use base64::Engine;
+    let (state, addr) = common::spawn_state_and_server().await;
+    let tab_id = common::register_fixture_tab(&state, 2).await;
+    ztab_watcher::sync::sync_once(&state).await.unwrap();
+    // `mined_height_of` (used by GET /sweep) reads display-order txids correctly.
+    assert_eq!(
+        state
+            .wallet
+            .mined_height_of(common::FIXTURE_FUNDING_TXID)
+            .unwrap(),
+        Some(4_503_718)
+    );
+
+    let started = std::time::Instant::now();
+    let (status, offer) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/sweep"),
+        serde_json::json!({ "recipient_address": SWEEP_RECIPIENT, "memo": "ztab sweep" }),
+    )
+    .await;
+    eprintln!(
+        "sweep offer: {status} in {:?}, summary {}",
+        started.elapsed(),
+        offer["summary"]
+    );
+    assert_eq!(status, reqwest::StatusCode::OK, "{offer}");
+    let s = &offer["summary"];
+    let (inputs, output, fee) = (
+        s["inputs_zat"].as_u64().unwrap(),
+        s["output_zat"].as_u64().unwrap(),
+        s["fee_zat"].as_u64().unwrap(),
+    );
+    assert!(inputs > 0 && fee > 0);
+    assert_eq!(output + fee, inputs);
+    let txid = s["txid"].as_str().unwrap();
+    assert_eq!(txid.len(), 64);
+    // The offered PCZT is what the summary describes.
+    let pczt = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(offer["pczt_b64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(ztab_watcher::sweep::pczt_txid(&pczt).unwrap(), txid);
+    let stored = state.meta.get_sweep(tab_id).unwrap().unwrap();
+    assert_eq!(stored.txid, txid);
+    assert_eq!(stored.broadcast_at, None);
+
+    // A foreign PCZT (another, already-mined sweep) is never transmitted.
+    let foreign = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sweep2.proved.pczt"),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/broadcast"),
+        serde_json::json!({
+            "pczt_b64": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(foreign)
+        }),
+    )
+    .await;
+    eprintln!("foreign broadcast: {status} {body}");
+    assert_eq!(status, reqwest::StatusCode::CONFLICT);
+
+    // The unsigned offer itself matches the txid but cannot be extracted: 422, not sent.
+    let (status, body) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/broadcast"),
+        serde_json::json!({ "pczt_b64": offer["pczt_b64"] }),
+    )
+    .await;
+    eprintln!("unsigned broadcast: {status} {body}");
+    assert_eq!(status, reqwest::StatusCode::UNPROCESSABLE_ENTITY);
+
+    let tab = state.meta.get_tab(tab_id).unwrap().unwrap();
+    assert_eq!(tab.state, ztab_watcher::meta::TabState::Open);
+    assert_eq!(
+        state.meta.get_sweep(tab_id).unwrap().unwrap().broadcast_at,
+        None
+    );
+    let r = reqwest::Client::new()
+        .get(format!("http://{addr}/v1/tabs/{tab_id}/sweep"))
+        .header("Authorization", "Bearer test-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let st: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(st["state"], "open");
+    assert_eq!(st["txid"], txid);
+    assert_eq!(st["mined_height"], serde_json::Value::Null);
+    assert_eq!(st["confirmations"], 0);
+}

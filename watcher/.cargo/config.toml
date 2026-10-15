@@ -1,0 +1,6 @@
+[env]
+# The public testnet lightwalletd (testnet.zec.rocks) drops fresh connections ("peer closed
+# connection without sending TLS close_notify") when ~14+ live tests dial it at once; cap
+# test parallelism so `cargo test --test testnet_live -- --ignored` is reliable. An
+# explicitly set RUST_TEST_THREADS or `--test-threads` still wins.
+RUST_TEST_THREADS = "8"

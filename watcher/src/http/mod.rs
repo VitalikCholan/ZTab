@@ -1,3 +1,4 @@
+pub mod sweep;
 pub mod tabs;
 use crate::{config::Config, meta::MetaStore, remote::LwdClient, wallet::WalletStore};
 use axum::{
@@ -65,6 +66,11 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/tabs", post(tabs::register))
         .route("/v1/tabs/{tab_id}", get(tabs::get_tab))
+        .route(
+            "/v1/tabs/{tab_id}/sweep",
+            post(sweep::offer).get(sweep::status),
+        )
+        .route("/v1/tabs/{tab_id}/broadcast", post(sweep::broadcast))
         .route_layer(middleware::from_fn_with_state(
             Arc::<str>::from(state.cfg.api_token.as_str()),
             auth,
