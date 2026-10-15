@@ -53,7 +53,7 @@ is random and is dropped when the run ends.
 5. Wait until the claim has 10 confirmations (about 5 minutes; ZIP 315 requires this
    before an external note can be spent). The test also waits up to 10 minutes for the
    funds to become spendable.
-6. Run the scenario (8–15 minutes):
+6. Run the scenario (about 5 minutes; up to ~15 with slow blocks):
    ```sh
    cargo test --test testnet_live full_tab_lifecycle -- --ignored --nocapture
    ```

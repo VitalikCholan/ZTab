@@ -822,10 +822,10 @@ fn fixture_payer_address() {
 /// in the mempool within 60 s, then mined, "paid" at 3 confirmations and sweepable at 10;
 /// the watcher proves the sweep, the test signs it as the browser will, the watcher
 /// broadcasts it and the sweep is mined. Needs a funded payer (`tests/fixtures/README.md`)
-/// and 8–15 minutes:
+/// about 5 minutes (up to ~15 with slow blocks):
 /// `ZTAB_TEST_SEED_HEX=… cargo test --test testnet_live full_tab_lifecycle -- --ignored --nocapture`
 #[tokio::test]
-#[ignore = "needs ZTAB_TEST_SEED_HEX with >= 0.05 TAZ and ~12 minutes"]
+#[ignore = "needs ZTAB_TEST_SEED_HEX with >= 0.05 TAZ and ~5 minutes"]
 async fn full_tab_lifecycle_on_testnet() {
     use std::time::{Duration, Instant};
     const PAYMENT_ZAT: u64 = 2_000_000;
@@ -851,9 +851,13 @@ async fn full_tab_lifecycle_on_testnet() {
     )
     .unwrap();
     let ufvk = usk.to_unified_full_viewing_key().encode(&network).unwrap();
-    let tip = common::tip(&state).await;
+    // The birthday sits 20 blocks below the tip. With a birthday at the tip, the wallet
+    // has no note-commitment checkpoint 10 blocks below the tip until the tab is 10 blocks
+    // old, and the sweep proposal fails with `ScanRequired` ("not synced yet") instead of
+    // the confirmations rule this test checks.
+    let birthday = common::tip(&state).await - 20;
     let tab_id = uuid::Uuid::new_v4();
-    let reg = common::post(&addr, "/v1/tabs", register_body(tab_id, &ufvk, tip, 2)).await;
+    let reg = common::post(&addr, "/v1/tabs", register_body(tab_id, &ufvk, birthday, 2)).await;
     assert_eq!(reg.status(), 201);
     let addresses: Vec<String> = reg.json::<serde_json::Value>().await.unwrap()["addresses"]
         .as_array()
@@ -863,7 +867,7 @@ async fn full_tab_lifecycle_on_testnet() {
         .collect();
     assert_eq!(addresses.len(), 2);
     ztab_watcher::sync::sync_once(&state).await.unwrap();
-    eprintln!("tab {tab_id} registered at birthday {tip}");
+    eprintln!("tab {tab_id} registered at birthday {birthday}");
 
     // 2. Participant 1 pays 0.02 TAZ from the fixture wallet.
     let payer = common::FixtureWallet::restore(&seed_hex, &state.cfg).await;
@@ -967,14 +971,31 @@ async fn full_tab_lifecycle_on_testnet() {
     .await;
     timings.push(("3 confirmations (paid)", sent_at.elapsed()));
     eprintln!("paid (3 confirmations) after {:?}", sent_at.elapsed());
-    let (status, body) = post_json(
-        addr,
-        &format!("/v1/tabs/{tab_id}/sweep"),
-        serde_json::json!({ "recipient_address": payer.address() }),
-    )
-    .await;
-    eprintln!("early sweep: {status} {body}");
-    assert_eq!(status, reqwest::StatusCode::CONFLICT);
+    // Paid but not yet sweepable: with the tab synced, the offer is refused by the
+    // confirmations rule. If a block lands between the sync and the request, the tab is
+    // briefly unsynced and gets a different 409, so that case is retried after another sync.
+    let mut early = None;
+    for _ in 0..5 {
+        ztab_watcher::sync::sync_once(&state).await.unwrap();
+        let (status, body) = post_json(
+            addr,
+            &format!("/v1/tabs/{tab_id}/sweep"),
+            serde_json::json!({ "recipient_address": payer.address() }),
+        )
+        .await;
+        eprintln!("early sweep: {status} {body}");
+        assert_eq!(status, reqwest::StatusCode::CONFLICT);
+        let error = body["error"].as_str().unwrap().to_string();
+        if !error.contains("not synced") {
+            early = Some(error);
+            break;
+        }
+    }
+    let early = early.expect("the tab never stayed synced long enough to ask for a sweep");
+    assert!(
+        early.contains("not every note has 10 confirmations"),
+        "early sweep refused for another reason: {early}"
+    );
     common::wait_until(
         &state,
         &addr,

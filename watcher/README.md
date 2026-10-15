@@ -64,7 +64,7 @@ cargo test --test testnet_live -- --ignored   # live tests against testnet.zec.r
   payment in the mempool (60 s at most), then as mined, paid at 3 confirmations and
   sweepable at 10. The test then signs the watcher's sweep like the browser does, and the
   sweep is mined. It needs `ZTAB_TEST_SEED_HEX` (a funded testnet seed that is never
-  committed) and takes 8–15 minutes. Run it on its own:
+  committed) and takes about 5 minutes (up to ~15 with slow blocks). Run it on its own:
   ```sh
   ZTAB_TEST_SEED_HEX=… cargo test --test testnet_live full_tab_lifecycle -- --ignored --nocapture
   ```
