@@ -18,3 +18,5 @@ wallets/
 .idea/
 .vscode/
 !watcher/tests/fixtures/*.pczt
+# SDD scratch workspace (ledgers, briefs, review diffs, test seed)
+.superpowers/
