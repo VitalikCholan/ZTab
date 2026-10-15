@@ -58,3 +58,40 @@ pub async fn spawn_state_and_server() -> (ztab_watcher::http::AppState, std::net
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (state, addr)
 }
+
+/// Registers the fixture account as a tab with `participants` participants. The fixture
+/// birthday is older than `tip - 1000`, so this bypasses `POST /v1/tabs` and its birthday
+/// check, doing what the handler does after validation.
+pub async fn register_fixture_tab(
+    state: &ztab_watcher::http::AppState,
+    participants: u32,
+) -> uuid::Uuid {
+    use ztab_watcher::meta::{TabRow, TabState};
+    let tab_id = uuid::Uuid::new_v4();
+    let account = {
+        let mut client = state.client.lock().await;
+        state
+            .wallet
+            .import_tab_account(&mut client, tab_id, FIXTURE_UFVK, FIXTURE_BIRTHDAY)
+            .await
+            .unwrap()
+    };
+    state
+        .meta
+        .insert_tab(&TabRow {
+            tab_id,
+            account_uuid: account.expose_uuid(),
+            ufvk: FIXTURE_UFVK.to_string(),
+            birthday: FIXTURE_BIRTHDAY,
+            participants_count: participants,
+            state: TabState::Open,
+            created_at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+    // Persist the participant addresses, as registration does.
+    state
+        .wallet
+        .participant_addresses(account, participants)
+        .unwrap();
+    tab_id
+}

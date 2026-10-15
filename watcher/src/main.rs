@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
         client,
         health: Arc::new(HealthState::default()),
     };
+    tokio::spawn(ztab_watcher::sync::run_sync_loop(state.clone()));
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!(listen = %cfg.listen, network = ?cfg.network, "ztab-watcher listening");
     axum::serve(listener, router(state)).await?;

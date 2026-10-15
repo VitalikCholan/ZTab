@@ -287,3 +287,187 @@ async fn get_tab_returns_empty_facts_for_fresh_tab() {
         .unwrap();
     assert_eq!(missing.status(), 404);
 }
+
+#[tokio::test]
+#[ignore]
+async fn sync_once_scans_fixture_tab_to_tip_and_finds_its_notes() {
+    let (state, _server) = common::spawn_state_and_server().await;
+    let tab_id = common::register_fixture_tab(&state, 2).await;
+    let started = std::time::Instant::now();
+    let report = ztab_watcher::sync::sync_once(&state).await.unwrap();
+    eprintln!(
+        "first sync: tip {} scanned_to {} in {:?}",
+        report.tip,
+        report.scanned_to,
+        started.elapsed()
+    );
+    assert!(report.scanned_to >= report.tip - 2);
+    assert_eq!(
+        state
+            .health
+            .synced_height
+            .load(std::sync::atomic::Ordering::Relaxed),
+        report.scanned_to
+    );
+    assert!(state.health.last_ok_at.lock().unwrap().is_some());
+    let tab = state.meta.get_tab(tab_id).unwrap().unwrap();
+    let facts = ztab_watcher::facts::tab_facts(
+        &state.wallet,
+        &state.meta,
+        &state.cfg,
+        &tab,
+        report.tip,
+        report.scanned_to,
+        false,
+    )
+    .unwrap();
+    // Index 0 received external payments (blocks 4503688, 4503742, 4503782): the
+    // Orchard-only UA handed out for index 0 resolves to the stored full-UA row.
+    assert!(facts.participants[0].status_facts.confirmed_zat > 0);
+    assert!(facts.participants[0].status_facts.best_confirmations >= 10);
+    // Index 1's only note (0.1 TAZ, block 4503710) was sent by the fixture account to
+    // itself; the scanner marks such notes as change, so it is not a participant payment.
+    assert_eq!(facts.participants[1].status_facts.confirmed_zat, 0);
+    // ...but it does resolve to diversifier index 1.
+    let self_send_address_id: i64 = state
+        .wallet
+        .read_conn()
+        .query_row(
+            "SELECT r.address_id FROM v_received_outputs r
+               JOIN transactions t ON t.id_tx = r.transaction_id
+              WHERE t.mined_height = 4503710 AND r.address_id IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        state
+            .wallet
+            .index_for_address_id(self_send_address_id)
+            .unwrap(),
+        Some(1)
+    );
+    // Every mined payment got a transparent-source verdict.
+    for p in facts.participants.iter().flat_map(|p| &p.payments) {
+        assert!(
+            state.meta.transparent_source(&p.txid).unwrap().is_some(),
+            "no tx_sources row for {}",
+            p.txid
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn reorg_truncate_clears_confirmed_facts() {
+    let (state, _server) = common::spawn_state_and_server().await;
+    let tab_id = common::register_fixture_tab(&state, 2).await;
+    let report = ztab_watcher::sync::sync_once(&state).await.unwrap();
+    {
+        use zcash_client_backend::data_api::WalletWrite;
+        let mut db = state.wallet.db();
+        db.truncate_to_height(zcash_protocol::consensus::BlockHeight::from_u32(
+            common::FIXTURE_BIRTHDAY,
+        ))
+        .unwrap();
+    }
+    let tab = state.meta.get_tab(tab_id).unwrap().unwrap();
+    let facts = ztab_watcher::facts::tab_facts(
+        &state.wallet,
+        &state.meta,
+        &state.cfg,
+        &tab,
+        report.tip,
+        common::FIXTURE_BIRTHDAY,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        facts.participants[0].status_facts.confirmed_zat, 0,
+        "truncated notes must not count as confirmed"
+    );
+    let report2 = ztab_watcher::sync::sync_once(&state).await.unwrap();
+    let facts2 = ztab_watcher::facts::tab_facts(
+        &state.wallet,
+        &state.meta,
+        &state.cfg,
+        &tab,
+        report2.tip,
+        report2.scanned_to,
+        false,
+    )
+    .unwrap();
+    assert!(
+        facts2.participants[0].status_facts.confirmed_zat > 0,
+        "rescan restores them"
+    );
+}
+
+/// Exercises the scanner's continuity-error path: after a sync, rewind the wallet a little
+/// and corrupt the stored hash of its new last block, so the next scanned block's
+/// `prev_hash` contradicts our history exactly as in a reorg.
+#[tokio::test]
+#[ignore]
+async fn continuity_error_rewinds_and_rescans() {
+    let (state, _server) = common::spawn_state_and_server().await;
+    let tab_id = common::register_fixture_tab(&state, 2).await;
+    let report = ztab_watcher::sync::sync_once(&state).await.unwrap();
+    let truncated = {
+        use zcash_client_backend::data_api::WalletWrite;
+        let mut db = state.wallet.db();
+        let h = db
+            .truncate_to_height(zcash_protocol::consensus::BlockHeight::from_u32(
+                report.scanned_to - 20,
+            ))
+            .unwrap();
+        u32::from(h)
+    };
+    let conn = rusqlite::Connection::open(state.cfg.data_dir.join("wallet.sqlite")).unwrap();
+    let n = conn
+        .execute(
+            "UPDATE blocks SET hash = zeroblob(32) WHERE height = ?1",
+            [truncated],
+        )
+        .unwrap();
+    assert_eq!(n, 1, "the rewound-to block must be stored");
+    drop(conn);
+
+    let report2 = ztab_watcher::sync::sync_once(&state).await.unwrap();
+    let rewound = report2
+        .rewound_to
+        .expect("continuity error must trigger a rewind");
+    assert!(
+        rewound < truncated,
+        "rewound to {rewound}, truncated at {truncated}"
+    );
+    assert!(report2.scanned_to >= report.tip);
+    let tab = state.meta.get_tab(tab_id).unwrap().unwrap();
+    let facts = ztab_watcher::facts::tab_facts(
+        &state.wallet,
+        &state.meta,
+        &state.cfg,
+        &tab,
+        report2.tip,
+        report2.scanned_to,
+        false,
+    )
+    .unwrap();
+    assert!(facts.participants[0].status_facts.confirmed_zat > 0);
+}
+
+#[tokio::test]
+#[ignore]
+async fn sync_once_without_tabs_does_not_scan() {
+    let (state, _server) = common::spawn_state_and_server().await;
+    let started = std::time::Instant::now();
+    let report = ztab_watcher::sync::sync_once(&state).await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert_eq!(report.scanned_to, report.tip);
+    assert_eq!(report.rewound_to, None);
+    let queued: i64 = state
+        .wallet
+        .read_conn()
+        .query_row("SELECT count(*) FROM scan_queue", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(queued, 0, "an empty wallet must not queue blocks");
+}

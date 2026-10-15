@@ -6,4 +6,5 @@ pub mod http;
 pub mod meta;
 pub mod remote;
 pub mod rng;
+pub mod sync;
 pub mod wallet;
