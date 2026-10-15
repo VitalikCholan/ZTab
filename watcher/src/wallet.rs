@@ -63,15 +63,17 @@ impl WalletStore {
     pub fn network(&self) -> Network {
         self.network
     }
+    // Locks tolerate poisoning: a poisoned guard only means a panic happened mid-call, and
+    // WalletDb/FsBlockDb wrap each write in a SQLite transaction, so state stays consistent.
     pub fn db(&self) -> MutexGuard<'_, Db> {
-        self.db.lock().unwrap()
+        self.db.lock().unwrap_or_else(|e| e.into_inner())
     }
     pub fn cache(&self) -> MutexGuard<'_, FsBlockDb> {
-        self.cache.lock().unwrap()
+        self.cache.lock().unwrap_or_else(|e| e.into_inner())
     }
     /// Read-only connection to the wallet database for raw SELECTs on the wallet schema.
     pub fn read_conn(&self) -> MutexGuard<'_, rusqlite::Connection> {
-        self.read.lock().unwrap()
+        self.read.lock().unwrap_or_else(|e| e.into_inner())
     }
     pub fn blocks_dir(&self) -> &Path {
         &self.blocks_dir

@@ -17,7 +17,10 @@ use zcash_client_backend::{
         scanning::ScanRange,
         WalletCommitmentTrees, WalletRead, WalletWrite,
     },
-    proto::service::{self, BlockId},
+    proto::{
+        compact_formats::CompactBlock,
+        service::{self, BlockId},
+    },
 };
 use zcash_client_sqlite::{chain::BlockMeta, error::SqliteClientError};
 use zcash_primitives::{block::BlockHash, merkle_tree::HashSer, transaction::Transaction};
@@ -75,23 +78,50 @@ pub async fn run_sync_loop(state: AppState) -> ! {
     let base = base_interval(state.cfg.block_interval_seconds);
     let mut pause = base;
     loop {
-        let ok = match sync_once(&state).await {
-            Ok(r) => {
-                tracing::debug!(
-                    tip = r.tip,
-                    scanned_to = r.scanned_to,
-                    rewound_to = r.rewound_to,
-                    "sync ok"
-                );
-                true
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "sync failed");
-                false
-            }
-        };
-        pause = next_backoff(pause, base, ok);
+        let s = state.clone();
+        pause = loop_step(pause, base, async move { sync_once(&s).await }).await;
         tokio::time::sleep(pause).await;
+    }
+}
+
+/// Runs one iteration with panics contained, logs the outcome, and returns the next pause.
+async fn loop_step<F>(pause: Duration, base: Duration, iteration: F) -> Duration
+where
+    F: std::future::Future<Output = Result<SyncReport, WatcherError>> + Send + 'static,
+{
+    let ok = match catch_panics(iteration).await {
+        Ok(r) => {
+            tracing::debug!(
+                tip = r.tip,
+                scanned_to = r.scanned_to,
+                rewound_to = r.rewound_to,
+                "sync ok"
+            );
+            true
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "sync failed");
+            false
+        }
+    };
+    next_backoff(pause, base, ok)
+}
+
+/// Runs `f` on its own task so a panic (e.g. inside the scanner on hostile remote data)
+/// becomes an error instead of killing the sync loop.
+async fn catch_panics<T, F>(f: F) -> Result<T, WatcherError>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = Result<T, WatcherError>> + Send + 'static,
+{
+    match tokio::spawn(f).await {
+        Ok(r) => r,
+        Err(e) if e.is_panic() => Err(WatcherError::Internal(anyhow::anyhow!(
+            "sync iteration panicked"
+        ))),
+        Err(e) => Err(WatcherError::Internal(anyhow::anyhow!(
+            "sync iteration aborted: {e}"
+        ))),
     }
 }
 
@@ -353,20 +383,7 @@ async fn download_blocks(
         .await
         .map_err(|e| rerr("get_block_range stream", e))?
     {
-        let (sapling_outputs_count, orchard_actions_count) =
-            block.vtx.iter().fold((0u32, 0u32), |(s, o), tx| {
-                (
-                    s.saturating_add(tx.outputs.len() as u32),
-                    o.saturating_add(tx.actions.len() as u32),
-                )
-            });
-        let meta = BlockMeta {
-            height: block.height(),
-            block_hash: block.hash(),
-            block_time: block.time,
-            sapling_outputs_count,
-            orchard_actions_count,
-        };
+        let meta = validated_block_meta(&block)?;
         if !range.block_range().contains(&meta.height) {
             delete_cached_blocks(blocks_dir, &metas).await;
             return Err(WatcherError::Remote(format!(
@@ -396,6 +413,32 @@ async fn download_blocks(
         .write_block_metadata(&metas)
         .map_err(|e| werr("write_block_metadata", e))?;
     Ok(metas)
+}
+
+/// Builds cache metadata from a server block, rejecting the shapes on which the
+/// `CompactBlock::height`/`hash`/`prev_hash` accessors (used here and by the scanner) panic.
+fn validated_block_meta(block: &CompactBlock) -> Result<BlockMeta, WatcherError> {
+    let height = u32::try_from(block.height)
+        .map_err(|_| WatcherError::Remote(format!("block height {} overflows", block.height)))?;
+    if block.header().is_none() && (block.hash.len() != 32 || block.prev_hash.len() != 32) {
+        return Err(WatcherError::Remote(format!(
+            "block {height} has no header and a hash that is not 32 bytes"
+        )));
+    }
+    let (sapling_outputs_count, orchard_actions_count) =
+        block.vtx.iter().fold((0u32, 0u32), |(s, o), tx| {
+            (
+                s.saturating_add(u32::try_from(tx.outputs.len()).unwrap_or(u32::MAX)),
+                o.saturating_add(u32::try_from(tx.actions.len()).unwrap_or(u32::MAX)),
+            )
+        });
+    Ok(BlockMeta {
+        height: BlockHeight::from_u32(height),
+        block_hash: block.hash(),
+        block_time: block.time,
+        sapling_outputs_count,
+        orchard_actions_count,
+    })
 }
 
 async fn download_chain_state(
@@ -649,6 +692,62 @@ mod tests {
         assert_eq!(internal.to_vec(), seq);
         assert!(txid_internal_bytes("abcd").is_err());
         assert!(txid_internal_bytes(&"zz".repeat(32)).is_err());
+    }
+
+    fn block(height: u64, hash_len: usize, prev_len: usize) -> CompactBlock {
+        CompactBlock {
+            height,
+            hash: vec![1; hash_len],
+            prev_hash: vec![2; prev_len],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn malformed_server_blocks_are_rejected_before_accessors() {
+        let ok = validated_block_meta(&block(4_500_000, 32, 32)).unwrap();
+        assert_eq!(u32::from(ok.height), 4_500_000);
+        assert_eq!(ok.block_hash.0, [1; 32]);
+        for bad in [
+            block(u64::from(u32::MAX) + 1, 32, 32),
+            block(4_500_000, 31, 32),
+            block(4_500_000, 32, 0),
+        ] {
+            assert!(matches!(
+                validated_block_meta(&bad),
+                Err(WatcherError::Remote(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn panicking_iteration_becomes_error_and_loop_continues() {
+        let base = Duration::from_secs(12);
+        let report = SyncReport {
+            tip: 10,
+            scanned_to: 10,
+            rewound_to: None,
+        };
+        let r: Result<SyncReport, _> = catch_panics(async { panic!("hostile block") }).await;
+        assert!(matches!(r, Err(WatcherError::Internal(_))));
+        // A panicking step backs off; the next step runs and succeeds.
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut pause = base;
+        for _ in 0..2 {
+            let a = attempts.clone();
+            pause = loop_step(pause, base, async move {
+                if a.fetch_add(1, Ordering::SeqCst) == 0 {
+                    panic!("first iteration panics");
+                }
+                Ok(report)
+            })
+            .await;
+            if attempts.load(Ordering::SeqCst) == 1 {
+                assert_eq!(pause, Duration::from_secs(24));
+            }
+        }
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(pause, base);
     }
 
     #[derive(Debug)]

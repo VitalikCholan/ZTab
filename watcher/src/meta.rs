@@ -1,6 +1,9 @@
 use crate::{config::Config, error::WatcherError};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::{path::Path, sync::Mutex};
+use std::{
+    path::Path,
+    sync::{Mutex, MutexGuard},
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -78,6 +81,12 @@ CREATE TABLE IF NOT EXISTS sweeps (
 "#;
 
 impl MetaStore {
+    /// Tolerates poisoning: a panic elsewhere while the lock was held cannot leave a
+    /// half-applied write, since each statement is atomic in SQLite.
+    fn conn(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn open(cfg: &Config) -> Result<Self, WatcherError> {
         Self::open_at(&cfg.data_dir.join("ztab.sqlite"))
     }
@@ -98,7 +107,7 @@ impl MetaStore {
 
     pub fn insert_tab(&self, t: &TabRow) -> Result<(), WatcherError> {
         let created_at = rfc3339(t.created_at)?;
-        self.conn.lock().unwrap().execute(
+        self.conn().execute(
             "INSERT INTO tabs (tab_id, account_uuid, ufvk, birthday, participants_count, state, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![t.tab_id.to_string(), t.account_uuid.to_string(), t.ufvk, t.birthday, t.participants_count, t.state.as_str(), created_at],
         ).map_err(|e| WatcherError::Wallet(e.to_string()))?;
@@ -109,10 +118,7 @@ impl MetaStore {
         // Raw column values are read under the lock; decoding and validation happen after
         // it is released, so corrupt stored data can neither panic nor poison the mutex.
         type Raw = (String, String, String, u32, u32, String, String);
-        let raw: Option<Raw> = self
-            .conn
-            .lock()
-            .unwrap()
+        let raw: Option<Raw> = self.conn()
             .query_row(
                 "SELECT tab_id, account_uuid, ufvk, birthday, participants_count, state, created_at FROM tabs WHERE tab_id = ?1",
                 params![tab_id.to_string()],
@@ -151,9 +157,7 @@ impl MetaStore {
     }
 
     pub fn set_tab_state(&self, tab_id: Uuid, state: TabState) -> Result<(), WatcherError> {
-        self.conn
-            .lock()
-            .unwrap()
+        self.conn()
             .execute(
                 "UPDATE tabs SET state = ?2 WHERE tab_id = ?1",
                 params![tab_id.to_string(), state.as_str()],
@@ -163,7 +167,7 @@ impl MetaStore {
     }
 
     pub fn sightings_for_tab(&self, tab_id: Uuid) -> Result<Vec<Sighting>, WatcherError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut st = conn
             .prepare(
                 "SELECT txid, participant_index, value_zat, first_seen_at FROM mempool_sightings WHERE tab_id = ?1 ORDER BY first_seen_at, txid",
@@ -189,9 +193,7 @@ impl MetaStore {
     pub fn upsert_sighting(&self, s: &Sighting, tab_id: Uuid) -> Result<(), WatcherError> {
         let value = i64::try_from(s.value_zat)
             .map_err(|_| WatcherError::Wallet("sighting value exceeds i64".into()))?;
-        self.conn
-            .lock()
-            .unwrap()
+        self.conn()
             .execute(
                 "INSERT INTO mempool_sightings (txid, tab_id, participant_index, value_zat, first_seen_at) VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(txid, tab_id, participant_index) DO UPDATE SET value_zat = excluded.value_zat",
@@ -202,9 +204,7 @@ impl MetaStore {
     }
 
     pub fn transparent_source(&self, txid: &str) -> Result<Option<bool>, WatcherError> {
-        self.conn
-            .lock()
-            .unwrap()
+        self.conn()
             .query_row(
                 "SELECT transparent_source FROM tx_sources WHERE txid = ?1",
                 params![txid],
@@ -215,9 +215,7 @@ impl MetaStore {
     }
 
     pub fn set_transparent_source(&self, txid: &str, v: bool) -> Result<(), WatcherError> {
-        self.conn
-            .lock()
-            .unwrap()
+        self.conn()
             .execute(
                 "INSERT OR REPLACE INTO tx_sources (txid, transparent_source) VALUES (?1, ?2)",
                 params![txid, v as i64],
@@ -241,7 +239,7 @@ impl MetaStore {
     }
 
     pub fn open_tabs(&self) -> Result<Vec<TabRow>, WatcherError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut st = conn
             .prepare("SELECT tab_id FROM tabs WHERE state IN ('open','sweeping')")
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
@@ -429,9 +427,7 @@ mod tests {
             let r = row(TabState::Open);
             store.insert_tab(&r).unwrap();
             store
-                .conn
-                .lock()
-                .unwrap()
+                .conn()
                 .execute(
                     &format!("UPDATE tabs SET {col} = ?1 WHERE tab_id = ?2"),
                     params![bad, r.tab_id.to_string()],
@@ -448,12 +444,7 @@ mod tests {
                 "{col}: {lookup:?}"
             );
             // Mutex must still be usable afterwards.
-            store
-                .conn
-                .lock()
-                .unwrap()
-                .execute("DELETE FROM tabs", [])
-                .unwrap();
+            store.conn().execute("DELETE FROM tabs", []).unwrap();
         }
     }
 }
