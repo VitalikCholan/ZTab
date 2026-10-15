@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         meta,
         client,
         health: Arc::new(HealthState::default()),
+        sweep_locks: Default::default(),
     };
     tokio::spawn(ztab_watcher::sync::run_sync_loop(state.clone()));
     tokio::spawn(ztab_watcher::mempool::run_mempool_loop(state.clone()));

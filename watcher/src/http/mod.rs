@@ -30,6 +30,7 @@ pub struct AppState {
     pub meta: Arc<MetaStore>,
     pub client: Arc<AsyncMutex<LwdClient>>,
     pub health: Arc<HealthState>,
+    pub sweep_locks: Arc<crate::sweep::SweepLocks>,
 }
 
 async fn auth(

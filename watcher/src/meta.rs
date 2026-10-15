@@ -325,18 +325,21 @@ impl MetaStore {
         .transpose()
     }
 
-    /// Stamps the tab's offered sweep as broadcast now.
-    pub fn mark_broadcast(&self, tab_id: Uuid) -> Result<(), WatcherError> {
+    /// Stamps the tab's offered sweep as broadcast now, only if it is still `txid`;
+    /// `Conflict` if the tab's offer is missing or is a different transaction.
+    pub fn mark_broadcast(&self, tab_id: Uuid, txid: &str) -> Result<(), WatcherError> {
         let now = rfc3339(OffsetDateTime::now_utc())?;
         let n = self
             .conn()
             .execute(
-                "UPDATE sweeps SET broadcast_at = ?2 WHERE tab_id = ?1",
-                params![tab_id.to_string(), now],
+                "UPDATE sweeps SET broadcast_at = ?2 WHERE tab_id = ?1 AND txid = ?3",
+                params![tab_id.to_string(), now, txid],
             )
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         if n == 0 {
-            return Err(WatcherError::Wallet("no sweep to mark broadcast".into()));
+            return Err(WatcherError::Conflict(format!(
+                "the tab's offered sweep is not {txid}"
+            )));
         }
         Ok(())
     }
@@ -604,7 +607,10 @@ mod tests {
         let store = store(&tmp);
         let tab = Uuid::new_v4();
         assert_eq!(store.get_sweep(tab).unwrap(), None);
-        assert!(store.mark_broadcast(tab).is_err());
+        assert!(matches!(
+            store.mark_broadcast(tab, "aa"),
+            Err(WatcherError::Conflict(_))
+        ));
         store.put_sweep(tab, "aa", "cA", 100).unwrap();
         let first = store.get_sweep(tab).unwrap().unwrap();
         assert_eq!(
@@ -616,7 +622,13 @@ mod tests {
             ("aa", "cA", 100)
         );
         assert_eq!(first.broadcast_at, None);
-        store.mark_broadcast(tab).unwrap();
+        // Keyed by txid: stamping another transaction touches nothing.
+        assert!(matches!(
+            store.mark_broadcast(tab, "zz"),
+            Err(WatcherError::Conflict(_))
+        ));
+        assert_eq!(store.get_sweep(tab).unwrap().unwrap().broadcast_at, None);
+        store.mark_broadcast(tab, "aa").unwrap();
         assert!(store
             .get_sweep(tab)
             .unwrap()

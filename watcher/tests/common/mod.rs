@@ -72,6 +72,7 @@ pub async fn spawn_state_and_server() -> (ztab_watcher::http::AppState, std::net
         meta,
         client,
         health: Arc::new(HealthState::default()),
+        sweep_locks: Default::default(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -146,6 +147,7 @@ pub async fn offline_state() -> ztab_watcher::http::AppState {
             channel,
         ))),
         health: Arc::new(HealthState::default()),
+        sweep_locks: Default::default(),
     }
 }
 

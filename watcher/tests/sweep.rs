@@ -79,13 +79,15 @@ async fn unsigned_or_garbage_pczt_is_unprocessable() {
 #[tokio::test]
 async fn sweep_and_broadcast_refuse_a_tab_that_is_not_open() {
     let state = common::offline_state().await;
-    let mut tab = fixture_tab(&state).await;
+    let tab = fixture_tab(&state).await;
     state
         .meta
         .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), "x", 10)
         .unwrap();
     for s in [TabState::Sweeping, TabState::Closed, TabState::Abandoned] {
-        tab.state = s;
+        // The stored state decides, even when the caller's copy still says open.
+        state.meta.set_tab_state(tab.tab_id, s).unwrap();
+        assert_eq!(tab.state, TabState::Open);
         let r = create_proved_pczt(&state, &tab, "utest1x", None).await;
         assert!(matches!(r, Err(WatcherError::Conflict(_))), "{s:?}: {r:?}");
         let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.signed.pczt")).await;
@@ -94,10 +96,42 @@ async fn sweep_and_broadcast_refuse_a_tab_that_is_not_open() {
 }
 
 #[tokio::test]
+async fn offer_and_broadcast_are_refused_while_a_sweep_request_is_in_flight() {
+    let state = common::offline_state().await;
+    let tab = fixture_tab(&state).await;
+    let offered = fixture_txid("sweep.proved.pczt");
+    state.meta.put_sweep(tab.tab_id, &offered, "x", 10).unwrap();
+    // Held exactly as an in-flight broadcast (or offer) holds it.
+    let in_flight = state.sweep_locks.try_acquire(tab.tab_id).unwrap();
+    let r = create_proved_pczt(&state, &tab, "utest1x", None).await;
+    assert!(matches!(r, Err(WatcherError::Conflict(_))), "{r:?}");
+    let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.signed.pczt")).await;
+    assert!(matches!(r, Err(WatcherError::Conflict(_))), "{r:?}");
+    // The offer the in-flight request works on is untouched.
+    let row = state.meta.get_sweep(tab.tab_id).unwrap().unwrap();
+    assert_eq!(
+        (row.txid.as_str(), row.broadcast_at),
+        (offered.as_str(), None)
+    );
+    // Status waits for the lock instead of failing.
+    let waiting = {
+        let (state, tab) = (state.clone(), tab.clone());
+        tokio::spawn(async move { sweep_status(&state, &tab).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!waiting.is_finished());
+    drop(in_flight);
+    let st = waiting.await.unwrap().unwrap();
+    assert_eq!(st.txid.as_deref(), Some(offered.as_str()));
+    // Released: other tabs were never affected, and this tab's lock is free again.
+    drop(state.sweep_locks.try_acquire(tab.tab_id).unwrap());
+}
+
+#[tokio::test]
 async fn unmined_sweep_reopens_the_tab_once_scanned_past_expiry() {
     let state = common::offline_state().await;
     let tab = fixture_tab(&state).await;
-    let st = sweep_status(&state, &tab).unwrap();
+    let st = sweep_status(&state, &tab).await.unwrap();
     assert_eq!(
         (st.state, st.txid, st.confirmations),
         (TabState::Open, None, 0)
@@ -105,7 +139,7 @@ async fn unmined_sweep_reopens_the_tab_once_scanned_past_expiry() {
 
     let txid = fixture_txid("sweep.proved.pczt");
     state.meta.put_sweep(tab.tab_id, &txid, "x", 1_000).unwrap();
-    state.meta.mark_broadcast(tab.tab_id).unwrap();
+    state.meta.mark_broadcast(tab.tab_id, &txid).unwrap();
     state
         .meta
         .set_tab_state(tab.tab_id, TabState::Sweeping)
@@ -113,16 +147,61 @@ async fn unmined_sweep_reopens_the_tab_once_scanned_past_expiry() {
     let tab = state.meta.get_tab(tab.tab_id).unwrap().unwrap();
     state.health.tip_height.store(1_005, Ordering::Relaxed);
     state.health.synced_height.store(1_000, Ordering::Relaxed);
-    let st = sweep_status(&state, &tab).unwrap();
+    let st = sweep_status(&state, &tab).await.unwrap();
     assert_eq!(st.state, TabState::Sweeping);
     assert_eq!(st.txid.as_deref(), Some(txid.as_str()));
     assert_eq!((st.mined_height, st.confirmations), (None, 0));
 
     state.health.synced_height.store(1_001, Ordering::Relaxed);
-    let st = sweep_status(&state, &tab).unwrap();
+    let st = sweep_status(&state, &tab).await.unwrap();
     assert_eq!(st.state, TabState::Open);
     assert_eq!(
         state.meta.get_tab(tab.tab_id).unwrap().unwrap().state,
         TabState::Open
     );
+}
+
+#[tokio::test]
+async fn pending_sweep_is_an_offer_the_wallet_holds_unmined() {
+    use zcash_primitives::transaction::Transaction;
+    use zcash_protocol::consensus::{BlockHeight, BranchId};
+    let state = common::offline_state().await;
+    let tab = fixture_tab(&state).await;
+    assert!(ztab_watcher::sweep::pending_sweep(&state, tab.tab_id)
+        .unwrap()
+        .is_none());
+    // Stand-in for an extracted, not-yet-mined sweep: a fixture transaction of the tab's
+    // account stored without a mined height, exactly as extraction stores a sweep.
+    let txid = common::FIXTURE_FUNDING_TXID;
+    let network = state.wallet.network();
+    let tx = Transaction::read(
+        &common::fixture_rawtx(txid)[..],
+        BranchId::for_height(&network, BlockHeight::from_u32(4_503_718)),
+    )
+    .unwrap();
+    zcash_client_backend::data_api::wallet::decrypt_and_store_transaction(
+        &network,
+        &mut *state.wallet.db(),
+        &tx,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        state.wallet.transaction_mined_height(txid).unwrap(),
+        Some(None)
+    );
+    // Offer for an unknown transaction: not pending.
+    state
+        .meta
+        .put_sweep(tab.tab_id, &fixture_txid("sweep2.proved.pczt"), "x", 10)
+        .unwrap();
+    assert!(ztab_watcher::sweep::pending_sweep(&state, tab.tab_id)
+        .unwrap()
+        .is_none());
+    // Offer for the stored, unmined transaction: pending.
+    state.meta.put_sweep(tab.tab_id, txid, "x", 10).unwrap();
+    let pending = ztab_watcher::sweep::pending_sweep(&state, tab.tab_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.txid, txid);
 }

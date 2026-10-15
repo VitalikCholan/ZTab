@@ -9,7 +9,14 @@ use crate::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
 use pczt::{roles::prover::Prover, Pczt};
-use std::{convert::Infallible, num::NonZeroU32, str::FromStr, sync::atomic::Ordering};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    num::NonZeroU32,
+    str::FromStr,
+    sync::{atomic::Ordering, Arc},
+};
+use uuid::Uuid;
 use zcash_address::ZcashAddress;
 use zcash_client_backend::{
     data_api::{
@@ -34,7 +41,7 @@ use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::{
     consensus::BranchId,
     memo::{Memo, MemoBytes},
-    ShieldedPool,
+    ShieldedPool, TxId,
 };
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -79,18 +86,66 @@ pub fn pczt_txid(bytes: &[u8]) -> Result<String, WatcherError> {
     txid_of(parse_pczt(bytes)?)
 }
 
+/// Per-tab serialization of sweep operations. Offer and broadcast take a tab's lock with
+/// `try_acquire` (a concurrent request is refused with `Conflict`, so a `POST /sweep` can
+/// never replace an offer whose broadcast is in flight); status waits for it.
+///
+/// Lock order: a tab's sweep lock is taken first, before the shared lightwalletd `client`
+/// lock and before any std guard (`db()`, `read_conn()`, meta), and never while holding
+/// either.
+#[derive(Default)]
+pub struct SweepLocks(std::sync::Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>);
+
+pub type SweepGuard = tokio::sync::OwnedMutexGuard<()>;
+
+impl SweepLocks {
+    fn lock_for(&self, tab_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(tab_id)
+            .or_default()
+            .clone()
+    }
+
+    /// The tab's sweep lock, or `Conflict` if another offer/broadcast holds it.
+    pub fn try_acquire(&self, tab_id: Uuid) -> Result<SweepGuard, WatcherError> {
+        self.lock_for(tab_id).try_lock_owned().map_err(|_| {
+            WatcherError::Conflict(
+                "another sweep request for this tab is in progress; retry shortly".into(),
+            )
+        })
+    }
+
+    pub async fn acquire(&self, tab_id: Uuid) -> SweepGuard {
+        self.lock_for(tab_id).lock_owned().await
+    }
+}
+
+/// The tab as currently stored; callers re-read it under the tab's sweep lock.
+fn reload(state: &AppState, tab_id: Uuid) -> Result<TabRow, WatcherError> {
+    state
+        .meta
+        .get_tab(tab_id)?
+        .ok_or_else(|| WatcherError::NotFound(format!("tab {tab_id}")))
+}
+
 /// Proposes sending the tab's entire balance (Orchard and Ironwood) to `recipient`, creates
 /// the PCZT, proves it, and records it as the tab's current offer. Fails with `Conflict`
-/// unless the tab is open and every note has `confirmations_sweep` confirmations.
+/// unless the tab is open and every note has `confirmations_sweep` confirmations, or while
+/// another offer/broadcast for the tab is in progress.
 pub async fn create_proved_pczt(
     state: &AppState,
     tab: &TabRow,
     recipient: &str,
     memo: Option<&str>,
 ) -> Result<SweepOffer, WatcherError> {
-    let (state, tab) = (state.clone(), tab.clone());
+    let guard = state.sweep_locks.try_acquire(tab.tab_id)?;
+    let (state, tab_id) = (state.clone(), tab.tab_id);
     let (recipient, memo) = (recipient.to_string(), memo.map(str::to_string));
     tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let tab = reload(&state, tab_id)?;
         create_proved_pczt_blocking(&state, &tab, &recipient, memo.as_deref())
     })
     .await
@@ -141,20 +196,26 @@ fn create_proved_pczt_blocking(
             None,
         )
         .map_err(|e| match e {
+            // Not spendable (yet): explained below, once the wallet lock is released.
             BackendError::DataSource(SqliteClientError::IneligibleNotes)
             | BackendError::InsufficientFunds { .. }
-            | BackendError::Change(ChangeError::InsufficientFunds { .. }) => {
-                WatcherError::Conflict(format!(
-                    "not every note has {} confirmations yet (or the tab holds no funds); wait and retry",
-                    state.cfg.confirmations_sweep
-                ))
+            | BackendError::Change(ChangeError::InsufficientFunds { .. }) => None,
+            BackendError::ScanRequired => Some(WatcherError::Conflict(
+                "the tab is not synced yet; retry shortly".into(),
+            )),
+            BackendError::Payment(e) => {
+                Some(WatcherError::Unprocessable(format!("recipient: {e}")))
             }
-            BackendError::ScanRequired => {
-                WatcherError::Conflict("the tab is not synced yet; retry shortly".into())
+            e => Some(WatcherError::Wallet(format!("propose: {e:?}"))),
+        });
+        let proposal = match proposal {
+            Ok(p) => p,
+            Err(Some(e)) => return Err(e),
+            Err(None) => {
+                drop(db);
+                return Err(not_spendable(state, tab.tab_id)?);
             }
-            BackendError::Payment(e) => WatcherError::Unprocessable(format!("recipient: {e}")),
-            e => WatcherError::Wallet(format!("propose: {e:?}")),
-        })?;
+        };
         if proposal.steps().len() != 1 {
             return Err(WatcherError::Unprocessable(
                 "recipient needs a multi-step transaction (e.g. a TEX address); use a shielded or unified address".into(),
@@ -211,6 +272,33 @@ fn create_proved_pczt_blocking(
     })
 }
 
+/// The tab's offered sweep if the wallet holds it extracted but unmined: its spends keep
+/// the tab's notes unavailable until it is mined or expires.
+pub fn pending_sweep(
+    state: &AppState,
+    tab_id: Uuid,
+) -> Result<Option<crate::meta::SweepRow>, WatcherError> {
+    let Some(sweep) = state.meta.get_sweep(tab_id)? else {
+        return Ok(None);
+    };
+    Ok((state.wallet.transaction_mined_height(&sweep.txid)? == Some(None)).then_some(sweep))
+}
+
+/// Why a sweep proposal found nothing spendable: a pending sweep holds the notes, or they
+/// lack confirmations (or the tab is empty).
+fn not_spendable(state: &AppState, tab_id: Uuid) -> Result<WatcherError, WatcherError> {
+    if let Some(sweep) = pending_sweep(state, tab_id)? {
+        return Ok(WatcherError::Conflict(format!(
+            "a sweep for txid {} is pending; retry /broadcast or wait for its expiry at height {}",
+            sweep.txid, sweep.expiry_height
+        )));
+    }
+    Ok(WatcherError::Conflict(format!(
+        "not every note has {} confirmations yet (or the tab holds no funds); wait and retry",
+        state.cfg.confirmations_sweep
+    )))
+}
+
 /// The Orchard-family circuit for a PCZT's consensus branch. Orchard and Ironwood share
 /// one circuit on every branch where Ironwood exists, so one key serves both bundles.
 fn circuit_version(
@@ -256,12 +344,15 @@ fn prove(pczt: Pczt) -> Result<Pczt, WatcherError> {
 
 /// Broadcasts a signed PCZT, but only if it is the sweep last offered for this tab and that
 /// offer has not been broadcast yet. `Unprocessable` if it cannot be extracted (e.g. a
-/// missing or bad signature).
+/// missing or bad signature). Holds the tab's sweep lock throughout, so the offer cannot be
+/// replaced while this runs.
 pub async fn broadcast_signed(
     state: &AppState,
     tab: &TabRow,
     pczt_b64: &str,
 ) -> Result<String, WatcherError> {
+    let _guard = state.sweep_locks.try_acquire(tab.tab_id)?;
+    let tab = reload(state, tab.tab_id)?;
     if tab.state != TabState::Open {
         return Err(WatcherError::Conflict(format!(
             "tab state is {}",
@@ -290,7 +381,17 @@ pub async fn broadcast_signed(
             "signed PCZT does not match the offered sweep".into(),
         ));
     }
-    let raw = {
+    // Already in the wallet means an earlier attempt extracted it and its send may have
+    // reached the network even though that attempt failed (e.g. a transport error).
+    let retry = state
+        .wallet
+        .transaction_mined_height(&offered.txid)?
+        .is_some();
+    let raw = if retry {
+        // Extracted (and verified) by the earlier attempt: resend the stored transaction
+        // rather than storing it again.
+        stored_raw(state, &offered.txid)?
+    } else {
         let state = state.clone();
         tokio::task::spawn_blocking(move || extract(&state, pczt))
             .await
@@ -306,17 +407,25 @@ pub async fn broadcast_signed(
         .map_err(|e| WatcherError::Remote(format!("send_transaction: {e}")))?
         .into_inner();
     drop(client);
-    if resp.error_code != 0 {
+    if resp.error_code != 0 && !(retry && already_known(&resp.error_message)) {
         return Err(WatcherError::Remote(format!(
             "lightwalletd rejected the transaction: {} {}",
             resp.error_code, resp.error_message
         )));
     }
-    state.meta.mark_broadcast(tab.tab_id)?;
+    state.meta.mark_broadcast(tab.tab_id, &offered.txid)?;
     state.meta.set_tab_state(tab.tab_id, TabState::Sweeping)?;
     tracing::info!(tab = %tab.tab_id, "sweep broadcast");
     tracing::debug!(tab = %tab.tab_id, txid = %offered.txid, "sweep broadcast txid");
     Ok(offered.txid)
+}
+
+/// A node's rejection of a transaction it already has (zcashd: "txn-already-in-mempool",
+/// "txn-already-known", "transaction already in block chain"; zebrad: "... already exists
+/// in the mempool / already in state").
+fn already_known(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("already")
 }
 
 /// Finalizes spends, verifies proofs and signatures, stores the transaction in the wallet
@@ -339,11 +448,20 @@ fn extract(state: &AppState, pczt: Pczt) -> Result<Vec<u8>, WatcherError> {
         Some(&orchard_vk),
     )
     .map_err(|e| WatcherError::Unprocessable(format!("extract: {e:?}")))?;
-    let tx = db
-        .get_transaction(txid)
-        .map_err(|e| WatcherError::Wallet(format!("get_transaction: {e:?}")))?
-        .ok_or_else(|| WatcherError::Wallet("extracted transaction was not stored".into()))?;
     drop(db);
+    stored_raw(state, &txid.to_string())
+}
+
+/// Raw bytes of wallet transaction `txid` (display hex).
+fn stored_raw(state: &AppState, txid: &str) -> Result<Vec<u8>, WatcherError> {
+    let id = TxId::from_hex(txid)
+        .ok_or_else(|| WatcherError::Wallet(format!("txid {txid} is not hex")))?;
+    let tx = state
+        .wallet
+        .db()
+        .get_transaction(id)
+        .map_err(|e| WatcherError::Wallet(format!("get_transaction: {e:?}")))?
+        .ok_or_else(|| WatcherError::Wallet("sweep transaction is not in the wallet".into()))?;
     let mut raw = vec![];
     tx.write(&mut raw)
         .map_err(|e| WatcherError::Wallet(format!("serialize tx: {e}")))?;
@@ -351,9 +469,13 @@ fn extract(state: &AppState, pczt: Pczt) -> Result<Vec<u8>, WatcherError> {
 }
 
 /// The tab's sweep progress. Moves `sweeping → closed` once the sweep has
-/// `confirmations_sweep` confirmations, and `sweeping → open` once the scanned chain is past
-/// its expiry height without it having been mined.
-pub fn sweep_status(state: &AppState, tab: &TabRow) -> Result<SweepStatus, WatcherError> {
+/// `confirmations_sweep` confirmations, `sweeping → open` once the scanned chain is past its
+/// expiry height without it having been mined, and `open → sweeping/closed` once the offered
+/// sweep is seen mined (its broadcast succeeded although the request reporting it failed,
+/// or the signer broadcast it).
+pub async fn sweep_status(state: &AppState, tab: &TabRow) -> Result<SweepStatus, WatcherError> {
+    let _guard = state.sweep_locks.acquire(tab.tab_id).await;
+    let tab = reload(state, tab.tab_id)?;
     let Some(sweep) = state.meta.get_sweep(tab.tab_id)? else {
         return Ok(SweepStatus {
             state: tab.state,
@@ -375,6 +497,9 @@ pub fn sweep_status(state: &AppState, tab: &TabRow) -> Result<SweepStatus, Watch
         sweep.expiry_height,
     );
     if new_state != tab.state {
+        if mined.is_some() && sweep.broadcast_at.is_none() {
+            state.meta.mark_broadcast(tab.tab_id, &sweep.txid)?;
+        }
         state.meta.set_tab_state(tab.tab_id, new_state)?;
         tracing::info!(tab = %tab.tab_id, state = new_state.as_str(), "sweep state changed");
     }
@@ -391,8 +516,9 @@ fn confirmations(tip: u32, mined: Option<u32>) -> u32 {
     mined.and_then(|h| tip.checked_sub(h)).map_or(0, |d| d + 1)
 }
 
-/// Only a `sweeping` tab moves: to `closed` once the sweep is mined `required` deep, back to
-/// `open` once the scanned height is past its expiry without it having been mined.
+/// `open`/`sweeping` → `closed` once the offered sweep is mined `required` deep;
+/// `open` → `sweeping` once it is mined at all (shallower); `sweeping` → `open` once the
+/// scanned height is past its expiry without it having been mined. Other states never move.
 fn next_state(
     current: TabState,
     mined: Option<u32>,
@@ -401,13 +527,14 @@ fn next_state(
     synced: u32,
     expiry_height: u32,
 ) -> TabState {
-    if current != TabState::Sweeping {
+    if !matches!(current, TabState::Open | TabState::Sweeping) {
         return current;
     }
     match mined {
         Some(_) if confirmations >= required.max(1) => TabState::Closed,
-        None if synced > expiry_height => TabState::Open,
-        _ => current,
+        Some(_) => TabState::Sweeping,
+        None if current == TabState::Sweeping && synced > expiry_height => TabState::Open,
+        None => current,
     }
 }
 
@@ -456,9 +583,34 @@ mod tests {
         assert_eq!(next_state(Sweeping, None, 0, 0, 100, 140), Sweeping);
         assert_eq!(next_state(Sweeping, Some(100), 1, 0, 100, 140), Closed);
         // other states never move here
-        for s in [Open, Closed, Abandoned] {
+        for s in [Closed, Abandoned] {
             assert_eq!(next_state(s, Some(1), 50, 10, 500, 2), s);
             assert_eq!(next_state(s, None, 0, 10, 500, 2), s);
         }
+    }
+
+    #[test]
+    fn open_tab_follows_its_offered_sweep_once_mined() {
+        use TabState::*;
+        // Broadcast outcome unknown to the watcher, but the offered txid got mined.
+        assert_eq!(next_state(Open, Some(100), 1, 10, 100, 140), Sweeping);
+        assert_eq!(next_state(Open, Some(100), 10, 10, 109, 140), Closed);
+        // Unmined: an open tab stays open, before or after the offer's expiry.
+        assert_eq!(next_state(Open, None, 0, 10, 100, 140), Open);
+        assert_eq!(next_state(Open, None, 0, 10, 500, 140), Open);
+    }
+
+    #[test]
+    fn already_known_rejections_are_recognized() {
+        for m in [
+            "txn-already-in-mempool",
+            "txn-already-known",
+            "transaction already in block chain",
+            "Transaction already exists in the mempool",
+        ] {
+            assert!(already_known(m), "{m}");
+        }
+        assert!(!already_known("bad-txns-inputs-spent"));
+        assert!(!already_known(""));
     }
 }

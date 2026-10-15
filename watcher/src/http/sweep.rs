@@ -64,5 +64,5 @@ pub async fn status(
     Path(tab_id): Path<Uuid>,
 ) -> Result<Json<SweepStatus>, WatcherError> {
     let tab = load_tab(&state, tab_id)?;
-    Ok(Json(sweep::sweep_status(&state, &tab)?))
+    Ok(Json(sweep::sweep_status(&state, &tab).await?))
 }

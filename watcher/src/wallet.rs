@@ -270,10 +270,19 @@ impl WalletStore {
     /// The mined height of the wallet transaction with display-hex `txid`; `None` if it is
     /// unknown or not mined.
     pub fn mined_height_of(&self, txid: &str) -> Result<Option<u32>, WatcherError> {
+        Ok(self.transaction_mined_height(txid)?.flatten())
+    }
+
+    /// `None` if the wallet does not hold transaction `txid` (display hex); otherwise its
+    /// mined height, `Some(None)` while unmined.
+    pub fn transaction_mined_height(
+        &self,
+        txid: &str,
+    ) -> Result<Option<Option<u32>>, WatcherError> {
         let mut bytes =
             hex::decode(txid).map_err(|e| WatcherError::Wallet(format!("txid hex: {e}")))?;
         bytes.reverse();
-        let mined: Option<Option<i64>> = self
+        let row: Option<Option<i64>> = self
             .read_conn()
             .query_row(
                 "SELECT mined_height FROM transactions WHERE txid = ?1",
@@ -282,12 +291,13 @@ impl WalletStore {
             )
             .optional()
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
-        mined
-            .flatten()
-            .map(|h| {
+        row.map(|m| {
+            m.map(|h| {
                 u32::try_from(h).map_err(|_| WatcherError::Wallet("mined height overflow".into()))
             })
             .transpose()
+        })
+        .transpose()
     }
 
     pub fn index_for_address_id(&self, address_id: i64) -> Result<Option<u32>, WatcherError> {
