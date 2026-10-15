@@ -42,7 +42,7 @@ Every route except `GET /v1/health` requires the bearer token.
 |---|---|
 | `POST /v1/tabs` | Register a tab: `{tab_id, ufvk, birthday, participants_count}`. The birthday must be at least `tip - 1000`. Returns the participants' Orchard-only addresses. Idempotent. |
 | `GET /v1/tabs/{id}` | Payment facts per participant, plus `state`, `synced_height`, `tip_height` and `stale`. |
-| `POST /v1/tabs/{id}/sweep` | Offer a proved PCZT that sweeps the whole tab to `recipient_address`. Returns 409 until every note has `ZTAB_CONFIRMATIONS_SWEEP` confirmations. |
+| `POST /v1/tabs/{id}/sweep` | Offer a proved PCZT that sweeps the whole tab to `recipient_address`, which must be a unified address of this network with an Orchard or Sapling receiver (transparent and TEX addresses get 422). A body with a `memo` gets 422 (`memo is not supported`). Returns 409 until every note has `ZTAB_CONFIRMATIONS_SWEEP` confirmations. The offered PCZT is not stored; only its txid and expiry height are. |
 | `POST /v1/tabs/{id}/broadcast` | Takes the signed PCZT of the current offer, extracts it and broadcasts it. The tab moves to `sweeping`. |
 | `GET /v1/tabs/{id}/sweep` | Sweep progress: `txid`, `mined_height`, `confirmations` and `state`. Moves `sweeping → closed` at sweep depth. |
 | `GET /v1/health` | Tip, synced height, lag and mempool subscription. |

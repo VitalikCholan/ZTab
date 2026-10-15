@@ -61,7 +61,6 @@ pub struct Sighting {
 pub struct SweepRow {
     pub tab_id: Uuid,
     pub txid: String,
-    pub pczt_b64: String,
     pub expiry_height: u32,
     pub created_at: OffsetDateTime,
     pub broadcast_at: Option<OffsetDateTime>,
@@ -86,7 +85,7 @@ CREATE TABLE IF NOT EXISTS tx_sources (
   txid TEXT PRIMARY KEY, transparent_source INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sweeps (
-  tab_id TEXT PRIMARY KEY, txid TEXT NOT NULL, pczt_b64 TEXT NOT NULL,
+  tab_id TEXT PRIMARY KEY, txid TEXT NOT NULL,
   expiry_height INTEGER NOT NULL, created_at TEXT NOT NULL, broadcast_at TEXT
 );
 "#;
@@ -111,6 +110,7 @@ impl MetaStore {
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        drop_offered_pczts(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -283,40 +283,39 @@ impl MetaStore {
         Ok(out)
     }
 
-    /// Records `txid` as the tab's offered sweep, replacing any earlier offer.
+    /// Records `txid` as the tab's offered sweep, replacing any earlier offer. The PCZT
+    /// itself is not kept: it round-trips through the client.
     pub fn put_sweep(
         &self,
         tab_id: Uuid,
         txid: &str,
-        pczt_b64: &str,
         expiry_height: u32,
     ) -> Result<(), WatcherError> {
         let created_at = rfc3339(OffsetDateTime::now_utc())?;
         self.conn()
             .execute(
-                "INSERT OR REPLACE INTO sweeps (tab_id, txid, pczt_b64, expiry_height, created_at, broadcast_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
-                params![tab_id.to_string(), txid, pczt_b64, expiry_height, created_at],
+                "INSERT OR REPLACE INTO sweeps (tab_id, txid, expiry_height, created_at, broadcast_at) VALUES (?1, ?2, ?3, ?4, NULL)",
+                params![tab_id.to_string(), txid, expiry_height, created_at],
             )
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         Ok(())
     }
 
     pub fn get_sweep(&self, tab_id: Uuid) -> Result<Option<SweepRow>, WatcherError> {
-        type Raw = (String, String, u32, String, Option<String>);
+        type Raw = (String, u32, String, Option<String>);
         let raw: Option<Raw> = self
             .conn()
             .query_row(
-                "SELECT txid, pczt_b64, expiry_height, created_at, broadcast_at FROM sweeps WHERE tab_id = ?1",
+                "SELECT txid, expiry_height, created_at, broadcast_at FROM sweeps WHERE tab_id = ?1",
                 params![tab_id.to_string()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
-        raw.map(|(txid, pczt_b64, expiry_height, created, broadcast)| {
+        raw.map(|(txid, expiry_height, created, broadcast)| {
             Ok(SweepRow {
                 tab_id,
                 txid,
-                pczt_b64,
                 expiry_height,
                 created_at: parse_rfc3339(&created)?,
                 broadcast_at: broadcast.as_deref().map(parse_rfc3339).transpose()?,
@@ -365,6 +364,23 @@ impl MetaStore {
         }
         Ok(tabs)
     }
+}
+
+/// Databases created before the PCZT stopped being stored at rest carry a `pczt_b64`
+/// column in `sweeps`; it is dropped (with its contents) on open.
+fn drop_offered_pczts(conn: &Connection) -> Result<(), WatcherError> {
+    let has_column: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sweeps') WHERE name = 'pczt_b64'",
+            [],
+            |r| r.get::<_, i64>(0).map(|n| n > 0),
+        )
+        .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+    if has_column {
+        conn.execute_batch("ALTER TABLE sweeps DROP COLUMN pczt_b64; VACUUM;")
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+    }
+    Ok(())
 }
 
 fn parse_uuid(field: &str, s: &str) -> Result<Uuid, WatcherError> {
@@ -602,6 +618,40 @@ mod tests {
     }
 
     #[test]
+    fn an_old_database_loses_its_stored_pczts_on_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ztab.sqlite");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE sweeps (tab_id TEXT PRIMARY KEY, txid TEXT NOT NULL, pczt_b64 TEXT NOT NULL,
+                   expiry_height INTEGER NOT NULL, created_at TEXT NOT NULL, broadcast_at TEXT);
+                 INSERT INTO sweeps VALUES ('00000000-0000-0000-0000-000000000001', 'aa', 'UENaVA', 7, '2026-10-15T00:00:00Z', NULL);",
+            )
+            .unwrap();
+        }
+        let store = MetaStore::open_at(&path).unwrap();
+        let cols: Vec<String> = {
+            let c = store.conn();
+            let mut st = c
+                .prepare("SELECT name FROM pragma_table_info('sweeps')")
+                .unwrap();
+            let v = st
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            v
+        };
+        assert!(!cols.iter().any(|c| c == "pczt_b64"), "{cols:?}");
+        let row = store.get_sweep(Uuid::from_u128(1)).unwrap().unwrap();
+        assert_eq!((row.txid.as_str(), row.expiry_height), ("aa", 7));
+        // Reopening is a no-op.
+        drop(store);
+        MetaStore::open_at(&path).unwrap();
+    }
+
+    #[test]
     fn sweep_put_replaces_offer_and_mark_broadcast_stamps_it() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
@@ -611,16 +661,9 @@ mod tests {
             store.mark_broadcast(tab, "aa"),
             Err(WatcherError::Conflict(_))
         ));
-        store.put_sweep(tab, "aa", "cA", 100).unwrap();
+        store.put_sweep(tab, "aa", 100).unwrap();
         let first = store.get_sweep(tab).unwrap().unwrap();
-        assert_eq!(
-            (
-                first.txid.as_str(),
-                first.pczt_b64.as_str(),
-                first.expiry_height
-            ),
-            ("aa", "cA", 100)
-        );
+        assert_eq!((first.txid.as_str(), first.expiry_height), ("aa", 100));
         assert_eq!(first.broadcast_at, None);
         // Keyed by txid: stamping another transaction touches nothing.
         assert!(matches!(
@@ -636,7 +679,7 @@ mod tests {
             .broadcast_at
             .is_some());
         // A new offer replaces the old one, including its broadcast stamp.
-        store.put_sweep(tab, "bb", "cB", 200).unwrap();
+        store.put_sweep(tab, "bb", 200).unwrap();
         let second = store.get_sweep(tab).unwrap().unwrap();
         assert_eq!(
             (

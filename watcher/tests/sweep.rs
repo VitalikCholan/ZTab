@@ -42,7 +42,7 @@ async fn broadcast_without_offer_or_with_foreign_pczt_is_conflict() {
 
     state
         .meta
-        .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), "x", 10)
+        .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), 10)
         .unwrap();
     let r = broadcast_signed(&state, &tab, &fixture_b64("sweep2.proved.pczt")).await;
     assert!(matches!(r, Err(WatcherError::Conflict(_))), "{r:?}");
@@ -63,7 +63,7 @@ async fn unsigned_or_garbage_pczt_is_unprocessable() {
     let tab = fixture_tab(&state).await;
     state
         .meta
-        .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), "x", 10)
+        .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), 10)
         .unwrap();
     // Matches the offer but lacks signatures: extraction fails, nothing is sent. The 422
     // bodies are fixed phrases, never library Debug output.
@@ -86,13 +86,13 @@ async fn sweep_and_broadcast_refuse_a_tab_that_is_not_open() {
     let tab = fixture_tab(&state).await;
     state
         .meta
-        .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), "x", 10)
+        .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), 10)
         .unwrap();
     for s in [TabState::Sweeping, TabState::Closed, TabState::Abandoned] {
         // The stored state decides, even when the caller's copy still says open.
         state.meta.set_tab_state(tab.tab_id, s).unwrap();
         assert_eq!(tab.state, TabState::Open);
-        let r = create_proved_pczt(&state, &tab, "utest1x", None).await;
+        let r = create_proved_pczt(&state, &tab, "utest1x").await;
         assert!(matches!(r, Err(WatcherError::Conflict(_))), "{s:?}: {r:?}");
         let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.signed.pczt")).await;
         assert!(matches!(r, Err(WatcherError::Conflict(_))), "{s:?}: {r:?}");
@@ -104,10 +104,10 @@ async fn offer_and_broadcast_are_refused_while_a_sweep_request_is_in_flight() {
     let state = common::offline_state().await;
     let tab = fixture_tab(&state).await;
     let offered = fixture_txid("sweep.proved.pczt");
-    state.meta.put_sweep(tab.tab_id, &offered, "x", 10).unwrap();
+    state.meta.put_sweep(tab.tab_id, &offered, 10).unwrap();
     // Held exactly as an in-flight broadcast (or offer) holds it.
     let in_flight = state.sweep_locks.try_acquire(tab.tab_id).unwrap();
-    let r = create_proved_pczt(&state, &tab, "utest1x", None).await;
+    let r = create_proved_pczt(&state, &tab, "utest1x").await;
     assert!(matches!(r, Err(WatcherError::Conflict(_))), "{r:?}");
     let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.signed.pczt")).await;
     assert!(matches!(r, Err(WatcherError::Conflict(_))), "{r:?}");
@@ -142,7 +142,7 @@ async fn unmined_sweep_reopens_the_tab_once_scanned_past_expiry() {
     );
 
     let txid = fixture_txid("sweep.proved.pczt");
-    state.meta.put_sweep(tab.tab_id, &txid, "x", 1_000).unwrap();
+    state.meta.put_sweep(tab.tab_id, &txid, 1_000).unwrap();
     state.meta.mark_broadcast(tab.tab_id, &txid).unwrap();
     state
         .meta
@@ -197,15 +197,39 @@ async fn pending_sweep_is_an_offer_the_wallet_holds_unmined() {
     // Offer for an unknown transaction: not pending.
     state
         .meta
-        .put_sweep(tab.tab_id, &fixture_txid("sweep2.proved.pczt"), "x", 10)
+        .put_sweep(tab.tab_id, &fixture_txid("sweep2.proved.pczt"), 10)
         .unwrap();
     assert!(ztab_watcher::sweep::pending_sweep(&state, tab.tab_id)
         .unwrap()
         .is_none());
     // Offer for the stored, unmined transaction: pending.
-    state.meta.put_sweep(tab.tab_id, txid, "x", 10).unwrap();
+    state.meta.put_sweep(tab.tab_id, txid, 10).unwrap();
     let pending = ztab_watcher::sweep::pending_sweep(&state, tab.tab_id)
         .unwrap()
         .unwrap();
     assert_eq!(pending.txid, txid);
+}
+
+#[tokio::test]
+async fn sweep_request_with_a_memo_is_refused() {
+    use tower::ServiceExt;
+    let state = common::offline_state().await;
+    let tab = fixture_tab(&state).await;
+    let app = ztab_watcher::http::router(state.clone());
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/v1/tabs/{}/sweep", tab.tab_id))
+        .header("Authorization", "Bearer test-token")
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(
+            serde_json::json!({ "recipient_address": "utest1x", "memo": "hi" }).to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 422);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("memo is not supported"));
+    assert!(state.meta.get_sweep(tab.tab_id).unwrap().is_none());
 }

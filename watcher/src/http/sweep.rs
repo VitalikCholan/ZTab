@@ -14,7 +14,9 @@ use uuid::Uuid;
 #[derive(Deserialize)]
 pub struct OfferRequest {
     pub recipient_address: String,
-    pub memo: Option<String>,
+    /// Refused when present: the watcher never takes, stores or relays a memo.
+    #[serde(default)]
+    pub memo: Option<serde::de::IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -40,10 +42,11 @@ pub async fn offer(
     Path(tab_id): Path<Uuid>,
     Json(body): Json<OfferRequest>,
 ) -> Result<Json<SweepOffer>, WatcherError> {
+    if body.memo.is_some() {
+        return Err(WatcherError::Unprocessable("memo is not supported".into()));
+    }
     let tab = load_tab(&state, tab_id)?;
-    let offer =
-        sweep::create_proved_pczt(&state, &tab, &body.recipient_address, body.memo.as_deref())
-            .await?;
+    let offer = sweep::create_proved_pczt(&state, &tab, &body.recipient_address).await?;
     Ok(Json(offer))
 }
 

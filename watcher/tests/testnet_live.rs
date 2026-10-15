@@ -641,11 +641,20 @@ async fn broadcast_rejects_mismatched_pczt() {
         Some(4_503_718)
     );
 
+    // A memo is refused: the watcher never takes, stores or relays one.
+    let (status, body) = post_json(
+        addr,
+        &format!("/v1/tabs/{tab_id}/sweep"),
+        serde_json::json!({ "recipient_address": SWEEP_RECIPIENT, "memo": "ztab sweep" }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
     let started = std::time::Instant::now();
     let (status, offer) = post_json(
         addr,
         &format!("/v1/tabs/{tab_id}/sweep"),
-        serde_json::json!({ "recipient_address": SWEEP_RECIPIENT, "memo": "ztab sweep" }),
+        serde_json::json!({ "recipient_address": SWEEP_RECIPIENT }),
     )
     .await;
     eprintln!(
@@ -1016,7 +1025,7 @@ async fn full_tab_lifecycle_on_testnet() {
     let offer = common::post(
         &addr,
         &format!("/v1/tabs/{tab_id}/sweep"),
-        serde_json::json!({"recipient_address": payer.address(), "memo": "ztab sweep"}),
+        serde_json::json!({"recipient_address": payer.address()}),
     )
     .await;
     assert_eq!(offer.status(), 200);

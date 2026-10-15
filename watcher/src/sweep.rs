@@ -13,7 +13,6 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     num::NonZeroU32,
-    str::FromStr,
     sync::{atomic::Ordering, Arc},
 };
 use uuid::Uuid;
@@ -41,7 +40,6 @@ use zcash_primitives::transaction::{
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::{
     consensus::{BranchId, Network, Parameters},
-    memo::{Memo, MemoBytes},
     ShieldedPool, TxId,
 };
 
@@ -167,15 +165,14 @@ pub async fn create_proved_pczt(
     state: &AppState,
     tab: &TabRow,
     recipient: &str,
-    memo: Option<&str>,
 ) -> Result<SweepOffer, WatcherError> {
     let guard = state.sweep_locks.try_acquire(tab.tab_id)?;
     let (state, tab_id) = (state.clone(), tab.tab_id);
-    let (recipient, memo) = (recipient.to_string(), memo.map(str::to_string));
+    let recipient = recipient.to_string();
     tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let tab = reload(&state, tab_id)?;
-        create_proved_pczt_blocking(&state, &tab, &recipient, memo.as_deref())
+        create_proved_pczt_blocking(&state, &tab, &recipient)
     })
     .await
     .map_err(|e| WatcherError::Internal(anyhow::anyhow!("sweep task: {e}")))?
@@ -185,7 +182,6 @@ fn create_proved_pczt_blocking(
     state: &AppState,
     tab: &TabRow,
     recipient: &str,
-    memo: Option<&str>,
 ) -> Result<SweepOffer, WatcherError> {
     if tab.state != TabState::Open {
         return Err(WatcherError::Conflict(format!(
@@ -195,10 +191,6 @@ fn create_proved_pczt_blocking(
     }
     let network = state.wallet.network();
     let recipient = shielded_recipient(&network, recipient)?;
-    let memo = memo
-        .map(|m| Memo::from_str(m).map(MemoBytes::from))
-        .transpose()
-        .map_err(|e| WatcherError::Unprocessable(format!("memo: {e}")))?;
     let account = AccountUuid::from_uuid(tab.account_uuid);
     let confirmations = NonZeroU32::new(state.cfg.confirmations_sweep).unwrap_or(NonZeroU32::MIN);
     // Same depth for wallet-internal (change) and external notes: a sweep must not spend
@@ -215,7 +207,8 @@ fn create_proved_pczt_blocking(
             &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
             &StandardFeeRule::Zip317,
             recipient,
-            memo,
+            // Never a memo: memos are not stored or relayed by the watcher.
+            None,
             // Everything, not MaxSpendable: a note below the confirmation depth fails the
             // proposal instead of being silently left behind.
             MaxSpendMode::Everything,
@@ -287,9 +280,7 @@ fn create_proved_pczt_blocking(
         .serialize()
         .map_err(|e| WatcherError::Wallet(format!("serialize pczt: {e:?}")))?;
     let pczt_b64 = B64.encode(&bytes);
-    state
-        .meta
-        .put_sweep(tab.tab_id, &txid, &pczt_b64, expiry_height)?;
+    state.meta.put_sweep(tab.tab_id, &txid, expiry_height)?;
     tracing::info!(tab = %tab.tab_id, "sweep offered");
     Ok(SweepOffer {
         pczt_b64,
