@@ -1,11 +1,5 @@
 #![forbid(unsafe_code)]
-// Later tasks consume these modules; drop this allow once they do.
-#![allow(dead_code)]
-mod config;
-mod error;
-mod rng;
-
-use config::Config;
+use ztab_watcher::config::Config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
