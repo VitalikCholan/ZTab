@@ -44,6 +44,15 @@ pub struct TabRow {
     pub created_at: OffsetDateTime,
 }
 
+/// A mempool sighting: a hint that a not-yet-mined tx pays a participant address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sighting {
+    pub txid: String,
+    pub participant_index: u32,
+    pub value_zat: u64,
+    pub first_seen_at: String,
+}
+
 pub struct MetaStore {
     conn: Mutex<Connection>,
 }
@@ -58,6 +67,9 @@ CREATE TABLE IF NOT EXISTS mempool_sightings (
   txid TEXT NOT NULL, tab_id TEXT NOT NULL, participant_index INTEGER NOT NULL,
   value_zat INTEGER NOT NULL, first_seen_at TEXT NOT NULL,
   PRIMARY KEY (txid, tab_id, participant_index)
+);
+CREATE TABLE IF NOT EXISTS tx_sources (
+  txid TEXT PRIMARY KEY, transparent_source INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sweeps (
   tab_id TEXT PRIMARY KEY, txid TEXT NOT NULL, pczt_b64 TEXT NOT NULL,
@@ -150,6 +162,84 @@ impl MetaStore {
         Ok(())
     }
 
+    pub fn sightings_for_tab(&self, tab_id: Uuid) -> Result<Vec<Sighting>, WatcherError> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn
+            .prepare(
+                "SELECT txid, participant_index, value_zat, first_seen_at FROM mempool_sightings WHERE tab_id = ?1 ORDER BY first_seen_at, txid",
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        let rows = st
+            .query_map(params![tab_id.to_string()], |r| {
+                Ok(Sighting {
+                    txid: r.get(0)?,
+                    participant_index: r.get(1)?,
+                    value_zat: r.get::<_, i64>(2)? as u64,
+                    first_seen_at: r.get(3)?,
+                })
+            })
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(rows)
+    }
+
+    /// Records a sighting; a repeat of the same (txid, tab, participant) keeps the original
+    /// `first_seen_at`.
+    pub fn upsert_sighting(&self, s: &Sighting, tab_id: Uuid) -> Result<(), WatcherError> {
+        let value = i64::try_from(s.value_zat)
+            .map_err(|_| WatcherError::Wallet("sighting value exceeds i64".into()))?;
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO mempool_sightings (txid, tab_id, participant_index, value_zat, first_seen_at) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(txid, tab_id, participant_index) DO UPDATE SET value_zat = excluded.value_zat",
+                params![s.txid, tab_id.to_string(), s.participant_index, value, s.first_seen_at],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn transparent_source(&self, txid: &str) -> Result<Option<bool>, WatcherError> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT transparent_source FROM tx_sources WHERE txid = ?1",
+                params![txid],
+                |r| r.get::<_, i64>(0).map(|v| v != 0),
+            )
+            .optional()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))
+    }
+
+    pub fn set_transparent_source(&self, txid: &str, v: bool) -> Result<(), WatcherError> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT OR REPLACE INTO tx_sources (txid, transparent_source) VALUES (?1, ?2)",
+                params![txid, v as i64],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(())
+    }
+
+    /// The known transparent-source flags among `txids`.
+    pub fn transparent_sources<'a>(
+        &self,
+        txids: impl IntoIterator<Item = &'a str>,
+    ) -> Result<std::collections::HashMap<String, bool>, WatcherError> {
+        let mut out = std::collections::HashMap::new();
+        for t in txids {
+            if let Some(v) = self.transparent_source(t)? {
+                out.insert(t.to_string(), v);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn open_tabs(&self) -> Result<Vec<TabRow>, WatcherError> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn
@@ -209,6 +299,51 @@ mod tests {
 
     fn store(tmp: &tempfile::TempDir) -> MetaStore {
         MetaStore::open_at(&tmp.path().join("ztab.sqlite")).unwrap()
+    }
+
+    #[test]
+    fn sightings_upsert_and_read_per_tab() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let s = Sighting {
+            txid: "aa".into(),
+            participant_index: 1,
+            value_zat: 500,
+            first_seen_at: "2026-01-01T00:00:00Z".into(),
+        };
+        store.upsert_sighting(&s, a).unwrap();
+        // Re-sighting keeps the original first_seen_at and updates the value.
+        store
+            .upsert_sighting(
+                &Sighting {
+                    value_zat: 600,
+                    first_seen_at: "2026-02-02T00:00:00Z".into(),
+                    ..s.clone()
+                },
+                a,
+            )
+            .unwrap();
+        let got = store.sightings_for_tab(a).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].value_zat, 600);
+        assert_eq!(got[0].first_seen_at, s.first_seen_at);
+        assert!(store.sightings_for_tab(b).unwrap().is_empty());
+    }
+
+    #[test]
+    fn transparent_source_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        assert_eq!(store.transparent_source("aa").unwrap(), None);
+        store.set_transparent_source("aa", true).unwrap();
+        store.set_transparent_source("bb", false).unwrap();
+        assert_eq!(store.transparent_source("aa").unwrap(), Some(true));
+        let m = store.transparent_sources(["aa", "bb", "cc"]).unwrap();
+        assert_eq!(m.len(), 2);
+        assert!(!m["bb"]);
+        store.set_transparent_source("aa", false).unwrap();
+        assert_eq!(store.transparent_source("aa").unwrap(), Some(false));
     }
 
     #[test]

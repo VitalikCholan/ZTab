@@ -197,7 +197,7 @@ impl WalletStore {
 }
 
 /// Decodes an 11-byte big-endian diversifier index; `None` if malformed or above `u32::MAX`.
-fn index_from_be(b: &[u8]) -> Option<u32> {
+pub fn index_from_be(b: &[u8]) -> Option<u32> {
     let n: [u8; 11] = b.try_into().ok()?;
     if n[..7].iter().any(|&x| x != 0) {
         return None;

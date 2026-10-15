@@ -228,3 +228,62 @@ async fn concurrent_registers_of_same_tab_are_idempotent() {
         (a.json().await.unwrap(), b.json().await.unwrap());
     assert_eq!(ja["addresses"], jb["addresses"]);
 }
+
+#[tokio::test]
+#[ignore]
+async fn get_tab_returns_empty_facts_for_fresh_tab() {
+    let (state, addr) = common::spawn_state_and_server().await;
+    let birthday = recent_birthday(&state).await;
+    let http = reqwest::Client::new();
+    let tab_id = uuid::Uuid::new_v4();
+    let r = http
+        .post(format!("http://{addr}/v1/tabs"))
+        .header("Authorization", "Bearer test-token")
+        .json(&register_body(tab_id, common::FIXTURE_UFVK, birthday, 3))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+
+    // The facts query binds accounts.uuid as a 16-byte BLOB; prove that matches storage.
+    let tab = state.meta.get_tab(tab_id).unwrap().unwrap();
+    let (ty, n): (String, i64) = state
+        .wallet
+        .read_conn()
+        .query_row(
+            "SELECT typeof(uuid), count(*) FROM accounts WHERE uuid = ?1",
+            [tab.account_uuid.as_bytes().to_vec()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((ty.as_str(), n), ("blob", 1));
+
+    let g = http
+        .get(format!("http://{addr}/v1/tabs/{tab_id}"))
+        .header("Authorization", "Bearer test-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(g.status(), 200);
+    let j: serde_json::Value = g.json().await.unwrap();
+    assert_eq!(j["tab_id"], tab_id.to_string());
+    assert_eq!(j["state"], "open");
+    assert_eq!(j["stale"], true);
+    let ps = j["participants"].as_array().unwrap();
+    assert_eq!(ps.len(), 3);
+    for (i, p) in ps.iter().enumerate() {
+        assert_eq!(p["index"], i as u64);
+        assert!(p["address"].as_str().unwrap().starts_with("utest1"));
+        assert_eq!(p["status_facts"]["confirmed_zat"], 0);
+        assert_eq!(p["status_facts"]["mempool_zat"], 0);
+        assert!(p["payments"].as_array().unwrap().is_empty());
+    }
+
+    let missing = http
+        .get(format!("http://{addr}/v1/tabs/{}", uuid::Uuid::new_v4()))
+        .header("Authorization", "Bearer test-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}

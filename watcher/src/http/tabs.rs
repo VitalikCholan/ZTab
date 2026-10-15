@@ -116,11 +116,33 @@ fn existing_registration(
     Ok(Some(out(body.tab_id, addresses)))
 }
 
+/// Serves facts from the databases and health atomics only; never touches the lightwalletd
+/// client, so it keeps answering while the upstream is unreachable.
 pub async fn get_tab(
-    State(_state): State<AppState>,
-    Path(_tab_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, WatcherError> {
-    Err(WatcherError::NotFound("implemented in Task 6".into()))
+    State(state): State<AppState>,
+    Path(tab_id): Path<Uuid>,
+) -> Result<Json<crate::facts::TabFacts>, WatcherError> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let tab = state
+        .meta
+        .get_tab(tab_id)?
+        .ok_or_else(|| WatcherError::NotFound(format!("tab {tab_id}")))?;
+    let tip = state.health.tip_height.load(Relaxed);
+    let synced = state.health.synced_height.load(Relaxed);
+    let last_ok = *state.health.last_ok_at.lock().unwrap();
+    let stale = last_ok.is_none_or(|t| {
+        (time::OffsetDateTime::now_utc() - t).whole_seconds()
+            > 3 * state.cfg.block_interval_seconds as i64
+    });
+    Ok(Json(crate::facts::tab_facts(
+        &state.wallet,
+        &state.meta,
+        &state.cfg,
+        &tab,
+        tip,
+        synced,
+        stale,
+    )?))
 }
 
 #[cfg(test)]
