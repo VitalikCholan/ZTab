@@ -69,7 +69,11 @@ pub fn aggregate(
             for n in notes.iter().filter(|n| n.participant_index == i) {
                 known_txids.insert(n.txid.clone());
                 let ts = sources.get(&n.txid).copied().unwrap_or(false);
-                let confirmations = n.mined_height.map_or(0, |h| tip.saturating_sub(h) + 1);
+                // tip below the mined height (stale/zero tip after restart or rewind) means 0, never 1.
+                let confirmations = n
+                    .mined_height
+                    .and_then(|h| tip.checked_sub(h))
+                    .map_or(0, |d| d + 1);
                 match n.mined_height {
                     Some(_) => {
                         sf.confirmed_zat += n.value_zat;
@@ -230,6 +234,84 @@ mod tests {
         let facts = aggregate(1, &notes, &sightings, &Default::default(), 100);
         assert_eq!(facts[0].status_facts.mempool_zat, 0);
         assert_eq!(facts[0].payments.len(), 1);
+    }
+
+    #[test]
+    fn tip_below_mined_height_reports_zero_confirmations() {
+        let notes = vec![row(0, 100, Some(90), "aa")];
+        let facts = aggregate(1, &notes, &[], &Default::default(), 0);
+        assert_eq!(facts[0].status_facts.best_confirmations, 0);
+        assert_eq!(facts[0].payments[0].confirmations, 0);
+        // Still a mined note: counted as confirmed, with an honest 0 confirmations.
+        assert_eq!(facts[0].status_facts.confirmed_zat, 100);
+        let at_tip = aggregate(1, &notes, &[], &Default::default(), 90);
+        assert_eq!(at_tip[0].status_facts.best_confirmations, 1);
+    }
+
+    #[test]
+    fn note_rows_reads_only_ironwood_and_orchard_non_change_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m: HashMap<String, String> = [
+            ("ZTAB_API_TOKEN", "t"),
+            ("ZTAB_DATA_DIR", tmp.path().to_str().unwrap()),
+            ("ZTAB_NETWORK", "test"),
+            ("ZTAB_LIGHTWALLETD_URL", "https://example.invalid:443"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let cfg = Config::from_map(&m).unwrap();
+        let wallet = WalletStore::open(&cfg).unwrap();
+        let acct = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        {
+            let c = rusqlite::Connection::open(tmp.path().join("wallet.sqlite")).unwrap();
+            for (id, u) in [(1, acct), (2, other)] {
+                c.execute(
+                    "INSERT INTO accounts (id, uuid, account_kind, uivk, birthday_height) VALUES (?1, ?2, 1, 'uivk' || ?1, 1)",
+                    rusqlite::params![id, u.as_bytes().to_vec()],
+                )
+                .unwrap();
+            }
+            let mut idx1 = vec![0u8; 11];
+            idx1[10] = 1;
+            c.execute(
+                "INSERT INTO addresses (id, account_id, key_scope, diversifier_index_be, address, receiver_flags) VALUES (1, 1, 0, ?1, 'a', 0)",
+                [idx1],
+            )
+            .unwrap();
+            let txid: Vec<u8> = (1u8..=32).collect();
+            let other_txid: Vec<u8> = (101u8..=132).collect();
+            for (id, t, mined) in [(1, &txid, Some(500)), (2, &other_txid, None)] {
+                c.execute(
+                    "INSERT INTO transactions (id_tx, txid, mined_height, min_observed_height) VALUES (?1, ?2, ?3, 1)",
+                    rusqlite::params![id, t, mined],
+                )
+                .unwrap();
+            }
+            // (table, account, action/output idx, tx, value, is_change)
+            let note = |sql: &str, rowid: i64, acc: i64, tx: i64, value: i64, change: i64| {
+                c.execute(sql, rusqlite::params![rowid, acc, tx, value, change])
+                    .unwrap();
+            };
+            let iw = "INSERT INTO ironwood_received_notes (id, action_index, account_id, transaction_id, diversifier, value, rho, rseed, is_change, address_id, note_version) VALUES (?1, ?1, ?2, ?3, x'00', ?4, x'00', x'00', ?5, 1, 1)";
+            note(iw, 1, 1, 1, 12_345, 0); // wanted: mined, ours, non-change
+            note(iw, 2, 1, 1, 999, 1); // change: excluded
+            note(iw, 3, 2, 1, 777, 0); // other account: excluded
+            note(iw, 4, 1, 2, 55, 0); // wanted: unmined
+            let sap = "INSERT INTO sapling_received_notes (id, output_index, account_id, transaction_id, diversifier, value, rcm, is_change, address_id) VALUES (?1, ?1, ?2, ?3, x'00', ?4, x'00', ?5, 1)";
+            note(sap, 1, 1, 1, 888, 0); // Sapling: excluded
+        }
+        let mut rows = note_rows(&wallet, acct).unwrap();
+        rows.sort_by_key(|r| r.value_zat);
+        assert_eq!(rows.len(), 2);
+        let display: Vec<u8> = (1u8..=32).rev().collect();
+        assert_eq!(rows[1].value_zat, 12_345);
+        assert_eq!(rows[1].participant_index, 1);
+        assert_eq!(rows[1].mined_height, Some(500));
+        assert_eq!(rows[1].txid, hex::encode(display));
+        assert_eq!(rows[0].value_zat, 55);
+        assert_eq!(rows[0].mined_height, None);
     }
 
     #[test]
