@@ -1,0 +1,45 @@
+[package]
+name = "ztab-watcher"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+
+[dependencies]
+zcash_client_backend = { version = "=0.25.0-pre.1", features = ["lightwalletd-tonic-tls-webpki-roots", "orchard", "pczt", "tor"] }
+zcash_client_sqlite  = { version = "=0.23.0-pre.1", features = ["orchard", "transparent-inputs"] }
+zcash_keys           = { version = "=0.17.0-pre.1", features = ["orchard", "sapling"] }
+zcash_primitives     = "=0.31.0-pre.1"
+zcash_proofs         = { version = "=0.31.0-pre.1", features = ["bundled-prover"] }
+zcash_protocol       = "=0.11.0-pre.0"
+zcash_address        = "=0.14.0-pre.1"
+zcash_transparent    = "=0.11.0-pre.1"
+pczt                 = { version = "=0.10.0-pre.1", features = ["io-finalizer", "orchard", "prover", "signer", "spend-finalizer", "tx-extractor"] }
+zip321               = "=0.10.0-pre.1"
+orchard = "0.16.0"
+sapling-crypto = "0.9"
+zip32 = "0.3"
+shardtree = "0.8"
+incrementalmerkletree = "0.9"
+rand = { version = "0.10", default-features = false, features = ["std", "sys_rng"] }
+rusqlite = { version = "0.37", features = ["bundled", "time"] }
+tonic = { version = "0.14", features = ["tls-webpki-roots"] }
+prost = "0.14"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures-util = "0.3"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+hex = "0.4"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { version = "0.12", features = ["json"] }
