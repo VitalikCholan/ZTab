@@ -139,6 +139,7 @@ pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
         let mut client = state.client.lock().await;
         sync_wallet(&state.wallet, &mut client, &state.health).await?
     };
+    crate::sweep::advance_sweeping_tabs(state)?;
     refresh_transparent_sources_for_open_tabs(state).await?;
     Ok(report)
 }

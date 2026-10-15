@@ -281,3 +281,61 @@ async fn a_repeated_broadcast_of_the_sent_sweep_returns_its_txid() {
     let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.signed.pczt")).await;
     assert!(matches!(r, Err(WatcherError::Conflict(_))), "{r:?}");
 }
+
+#[tokio::test]
+async fn a_sync_pass_closes_a_sweeping_tab_whose_sweep_is_deep_enough() {
+    use zcash_primitives::transaction::Transaction;
+    use zcash_protocol::consensus::{BlockHeight, BranchId};
+    use ztab_watcher::sweep::advance_sweeping_tabs;
+    let state = common::offline_state().await;
+    let tab = fixture_tab(&state).await;
+    // Stand-in for a mined sweep: a fixture transaction of the tab's account stored with
+    // its mined height (4503718).
+    let txid = common::FIXTURE_FUNDING_TXID;
+    let mined = 4_503_718;
+    let network = state.wallet.network();
+    let tx = Transaction::read(
+        &common::fixture_rawtx(txid)[..],
+        BranchId::for_height(&network, BlockHeight::from_u32(mined)),
+    )
+    .unwrap();
+    zcash_client_backend::data_api::wallet::decrypt_and_store_transaction(
+        &network,
+        &mut *state.wallet.db(),
+        &tx,
+        Some(BlockHeight::from_u32(mined)),
+    )
+    .unwrap();
+    assert_eq!(state.wallet.mined_height_of(txid).unwrap(), Some(mined));
+    state.meta.put_sweep(tab.tab_id, txid, mined + 40).unwrap();
+    state.meta.mark_broadcast(tab.tab_id, txid).unwrap();
+    state
+        .meta
+        .set_tab_state(tab.tab_id, TabState::Sweeping)
+        .unwrap();
+    let stored = || state.meta.get_tab(tab.tab_id).unwrap().unwrap().state;
+
+    // 9 confirmations: still sweeping.
+    state.health.tip_height.store(mined + 8, Ordering::Relaxed);
+    state
+        .health
+        .synced_height
+        .store(mined + 8, Ordering::Relaxed);
+    assert_eq!(advance_sweeping_tabs(&state).unwrap(), 0);
+    assert_eq!(stored(), TabState::Sweeping);
+
+    // 10 confirmations, but a sweep request holds the tab: skipped, not waited for.
+    state.health.tip_height.store(mined + 9, Ordering::Relaxed);
+    state
+        .health
+        .synced_height
+        .store(mined + 9, Ordering::Relaxed);
+    let busy = state.sweep_locks.try_acquire(tab.tab_id).unwrap();
+    assert_eq!(advance_sweeping_tabs(&state).unwrap(), 0);
+    assert_eq!(stored(), TabState::Sweeping);
+    drop(busy);
+
+    // One pass later: closed, with no GET /sweep involved.
+    assert_eq!(advance_sweeping_tabs(&state).unwrap(), 1);
+    assert_eq!(stored(), TabState::Closed);
+}

@@ -563,7 +563,33 @@ fn stored_raw(state: &AppState, txid: &str) -> Result<Vec<u8>, WatcherError> {
 /// or the signer broadcast it).
 pub async fn sweep_status(state: &AppState, tab: &TabRow) -> Result<SweepStatus, WatcherError> {
     let _guard = state.sweep_locks.acquire(tab.tab_id).await;
-    let tab = reload(state, tab.tab_id)?;
+    advance(state, tab.tab_id)
+}
+
+/// Advances every `sweeping` tab as `GET /sweep` would (closed at depth, open after expiry),
+/// so the state moves even if only `GET /v1/tabs` is polled. A tab whose sweep lock is
+/// busy is skipped until the next pass. Reads stored facts only, never the network.
+/// Returns how many tabs changed state.
+pub fn advance_sweeping_tabs(state: &AppState) -> Result<usize, WatcherError> {
+    let mut changed = 0;
+    for tab in state.meta.open_tabs()? {
+        if tab.state != TabState::Sweeping {
+            continue;
+        }
+        let Ok(_guard) = state.sweep_locks.try_acquire(tab.tab_id) else {
+            continue;
+        };
+        if advance(state, tab.tab_id)?.state != TabState::Sweeping {
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
+/// Re-reads the tab and applies [`next_state`] from stored facts. The caller holds the
+/// tab's sweep lock.
+fn advance(state: &AppState, tab_id: Uuid) -> Result<SweepStatus, WatcherError> {
+    let tab = reload(state, tab_id)?;
     let Some(sweep) = state.meta.get_sweep(tab.tab_id)? else {
         return Ok(SweepStatus {
             state: tab.state,
