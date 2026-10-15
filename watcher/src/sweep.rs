@@ -17,7 +17,7 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 use uuid::Uuid;
-use zcash_address::ZcashAddress;
+use zcash_address::{ConversionError, ZcashAddress};
 use zcash_client_backend::{
     data_api::{
         error::Error as BackendError,
@@ -32,6 +32,7 @@ use zcash_client_backend::{
     wallet::OvkPolicy,
 };
 use zcash_client_sqlite::{error::SqliteClientError, util::SystemClock, AccountUuid};
+use zcash_keys::address::Address;
 use zcash_primitives::transaction::{
     builder::BundlePadding,
     components::orchard::bundle_version_for_branch,
@@ -39,7 +40,7 @@ use zcash_primitives::transaction::{
 };
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::{
-    consensus::BranchId,
+    consensus::{BranchId, Network, Parameters},
     memo::{Memo, MemoBytes},
     ShieldedPool, TxId,
 };
@@ -84,6 +85,30 @@ fn txid_of(pczt: Pczt) -> Result<String, WatcherError> {
 
 pub fn pczt_txid(bytes: &[u8]) -> Result<String, WatcherError> {
     txid_of(parse_pczt(bytes)?)
+}
+
+/// Parses a sweep recipient: it must be a unified address of this network with an Orchard
+/// or Sapling receiver. Transparent and TEX addresses are refused (no transparent hops),
+/// as are addresses of the other network.
+pub fn shielded_recipient(network: &Network, encoded: &str) -> Result<ZcashAddress, WatcherError> {
+    let refuse = |m: &str| WatcherError::Unprocessable(format!("recipient: {m}"));
+    let parsed = ZcashAddress::try_from_encoded(encoded.trim())
+        .map_err(|_| refuse("not a Zcash address"))?;
+    match parsed
+        .clone()
+        .convert_if_network::<Address>(network.network_type())
+    {
+        Ok(Address::Unified(ua)) if ua.has_orchard() || ua.has_sapling() => Ok(parsed),
+        Ok(Address::Unified(_)) => Err(refuse("the unified address has no shielded receiver")),
+        Ok(Address::Transparent(_) | Address::Tex(_)) => Err(refuse(
+            "transparent addresses are not accepted; use a shielded unified address",
+        )),
+        Ok(Address::Sapling(_)) => Err(refuse("use a unified address with a shielded receiver")),
+        Err(ConversionError::IncorrectNetwork { .. }) => {
+            Err(refuse("the address belongs to another network"))
+        }
+        Err(_) => Err(refuse("not a supported address")),
+    }
 }
 
 /// Per-tab serialization of sweep operations. Offer and broadcast take a tab's lock with
@@ -165,8 +190,7 @@ fn create_proved_pczt_blocking(
         )));
     }
     let network = state.wallet.network();
-    let recipient = ZcashAddress::try_from_encoded(recipient)
-        .map_err(|e| WatcherError::Unprocessable(format!("recipient: {e}")))?;
+    let recipient = shielded_recipient(&network, recipient)?;
     let memo = memo
         .map(|m| Memo::from_str(m).map(MemoBytes::from))
         .transpose()
@@ -605,6 +629,42 @@ mod tests {
         let offered = pczt_txid(&proved).unwrap();
         assert_eq!(pczt_txid(&signed).unwrap(), offered);
         assert_ne!(pczt_txid(&other).unwrap(), offered);
+    }
+
+    #[test]
+    fn sweep_recipient_must_be_a_shielded_ua_of_this_network() {
+        use zcash_address::ToAddress;
+        use zcash_keys::keys::{UnifiedAddressRequest, UnifiedSpendingKey};
+        use zcash_protocol::consensus::NetworkType;
+        let ua = |network: Network| {
+            UnifiedSpendingKey::from_seed(&network, &[7; 32], zip32::AccountId::ZERO)
+                .unwrap()
+                .to_unified_full_viewing_key()
+                .default_address(UnifiedAddressRequest::SHIELDED)
+                .unwrap()
+                .0
+                .encode(&network)
+        };
+        let test = Network::TestNetwork;
+        let unprocessable = |r: Result<ZcashAddress, WatcherError>| {
+            matches!(r, Err(WatcherError::Unprocessable(_)))
+        };
+        // Testnet UA with an Orchard receiver: accepted.
+        let ok = shielded_recipient(&test, &ua(test)).unwrap();
+        assert!(ok.can_receive_as(zcash_protocol::PoolType::ORCHARD));
+        // Mainnet UA on testnet.
+        assert!(unprocessable(shielded_recipient(
+            &test,
+            &ua(Network::MainNetwork)
+        )));
+        // Transparent P2PKH and TEX addresses.
+        let t = ZcashAddress::from_transparent_p2pkh(NetworkType::Test, [1; 20]).encode();
+        assert!(t.starts_with("tm"));
+        assert!(unprocessable(shielded_recipient(&test, &t)));
+        let tex = ZcashAddress::from_tex(NetworkType::Test, [1; 20]).encode();
+        assert!(unprocessable(shielded_recipient(&test, &tex)));
+        // Garbage.
+        assert!(unprocessable(shielded_recipient(&test, "utest1x")));
     }
 
     #[test]
