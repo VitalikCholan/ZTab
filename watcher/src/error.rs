@@ -22,6 +22,21 @@ pub enum WatcherError {
     Internal(#[from] anyhow::Error),
 }
 
+impl WatcherError {
+    /// The variant name: safe to log at any level (carries no amounts, txids or addresses).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            WatcherError::Config(_) => "config",
+            WatcherError::Wallet(_) => "wallet",
+            WatcherError::Remote(_) => "remote",
+            WatcherError::NotFound(_) => "not_found",
+            WatcherError::Conflict(_) => "conflict",
+            WatcherError::Unprocessable(_) => "unprocessable",
+            WatcherError::Internal(_) => "internal",
+        }
+    }
+}
+
 impl IntoResponse for WatcherError {
     fn into_response(self) -> Response {
         let status = match &self {

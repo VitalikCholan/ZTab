@@ -43,6 +43,9 @@ const MAX_REWINDS_PER_PASS: u32 = 3;
 /// Upper bound on batches per pass (10M blocks), so a wedged scan queue cannot spin forever.
 const MAX_BATCHES_PER_PASS: u32 = 10_000;
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// Budget for downloading one batch (up to `BATCH_SIZE` compact blocks) once its stream
+/// has started.
+const BLOCK_BATCH_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncReport {
@@ -268,14 +271,20 @@ async fn fetch_subtree_roots(
 ) -> Result<Vec<(BlockHeight, Vec<u8>)>, WatcherError> {
     let mut request = service::GetSubtreeRootsArg::default();
     request.set_shielded_protocol(protocol);
-    let roots: Vec<service::SubtreeRoot> = client
-        .get_subtree_roots(request)
-        .await
-        .map_err(|e| rerr("get_subtree_roots", e))?
-        .into_inner()
-        .try_collect()
-        .await
-        .map_err(|e| rerr("get_subtree_roots stream", e))?;
+    let stream = remote::with_timeout(
+        "get_subtree_roots",
+        remote::STREAM_START_TIMEOUT,
+        client.get_subtree_roots(request),
+    )
+    .await?
+    .into_inner();
+    // A few hundred roots at most: the whole stream gets one more stream-start budget.
+    let roots: Vec<service::SubtreeRoot> = remote::with_timeout(
+        "get_subtree_roots stream",
+        remote::STREAM_START_TIMEOUT,
+        stream.try_collect(),
+    )
+    .await?;
     roots
         .into_iter()
         .map(|r| {
@@ -368,33 +377,49 @@ async fn download_blocks(
         }),
         pool_types: Default::default(),
     };
-    let mut stream = client
-        .get_block_range(request)
-        .await
-        .map_err(|e| rerr("get_block_range", e))?
-        .into_inner();
+    let mut stream = remote::with_timeout(
+        "get_block_range",
+        remote::STREAM_START_TIMEOUT,
+        client.get_block_range(request),
+    )
+    .await?
+    .into_inner();
     let blocks_dir = wallet.blocks_dir();
     let mut metas = Vec::with_capacity(range.len());
-    while let Some(block) = stream
-        .try_next()
-        .await
-        .map_err(|e| rerr("get_block_range stream", e))?
-    {
-        let meta = validated_block_meta(&block)?;
-        if !range.block_range().contains(&meta.height) {
-            delete_cached_blocks(blocks_dir, &metas).await;
-            return Err(WatcherError::Remote(format!(
-                "server sent block {} outside the requested range",
-                meta.height
-            )));
+    let received = tokio::time::timeout(BLOCK_BATCH_TIMEOUT, async {
+        while let Some(block) = stream
+            .try_next()
+            .await
+            .map_err(|e| rerr("get_block_range stream", e))?
+        {
+            let meta = validated_block_meta(&block)?;
+            if !range.block_range().contains(&meta.height) {
+                return Err(WatcherError::Remote(format!(
+                    "server sent block {} outside the requested range",
+                    meta.height
+                )));
+            }
+            let mut file = tokio::fs::File::create(meta.block_file_path(&blocks_dir))
+                .await
+                .map_err(|e| werr("create block file", e))?;
+            // Recorded before writing, so a failed or timed-out write is cleaned up too.
+            metas.push(meta);
+            file.write_all(&block.encode_to_vec())
+                .await
+                .map_err(|e| werr("write block file", e))?;
         }
-        let mut file = tokio::fs::File::create(meta.block_file_path(&blocks_dir))
-            .await
-            .map_err(|e| werr("create block file", e))?;
-        file.write_all(&block.encode_to_vec())
-            .await
-            .map_err(|e| werr("write block file", e))?;
-        metas.push(meta);
+        Ok(())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(WatcherError::Remote(format!(
+            "get_block_range: batch not received within {}s",
+            BLOCK_BATCH_TIMEOUT.as_secs()
+        )))
+    });
+    if let Err(e) = received {
+        delete_cached_blocks(blocks_dir, &metas).await;
+        return Err(e);
     }
     if metas.len() != range.len() {
         delete_cached_blocks(blocks_dir, &metas).await;
@@ -441,16 +466,18 @@ async fn download_chain_state(
     client: &mut LwdClient,
     height: BlockHeight,
 ) -> Result<ChainState, WatcherError> {
-    client
-        .get_tree_state(BlockId {
+    remote::with_timeout(
+        "get_tree_state",
+        remote::UNARY_TIMEOUT,
+        client.get_tree_state(BlockId {
             height: u64::from(height),
             hash: vec![],
-        })
-        .await
-        .map_err(|e| rerr("get_tree_state", e))?
-        .into_inner()
-        .to_chain_state()
-        .map_err(|e| rerr("tree state", e))
+        }),
+    )
+    .await?
+    .into_inner()
+    .to_chain_state()
+    .map_err(|e| rerr("tree state", e))
 }
 
 /// Removes the given compact-block files, tolerating files that are already gone.
@@ -603,14 +630,16 @@ pub async fn refresh_transparent_sources(
             continue;
         }
         let internal = txid_internal_bytes(txid)?;
-        let raw = client
-            .get_transaction(service::TxFilter {
+        let raw = remote::with_timeout(
+            "get_transaction",
+            remote::UNARY_TIMEOUT,
+            client.get_transaction(service::TxFilter {
                 hash: internal.to_vec(),
                 ..Default::default()
-            })
-            .await
-            .map_err(|e| rerr("get_transaction", e))?
-            .into_inner();
+            }),
+        )
+        .await?
+        .into_inner();
         // 0 and u64::MAX are lightwalletd's "not mined" sentinels.
         let height = match u32::try_from(raw.height) {
             Ok(h) if h > 0 => BlockHeight::from_u32(h),

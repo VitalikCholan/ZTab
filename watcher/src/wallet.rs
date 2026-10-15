@@ -107,14 +107,16 @@ impl WalletStore {
             .activation_height(NetworkUpgrade::Sapling)
             .expect("sapling height");
         let birthday_height = BlockHeight::from_u32(birthday).max(sapling);
-        let tree_state = client
-            .get_tree_state(service::BlockId {
+        let tree_state = crate::remote::with_timeout(
+            "get_tree_state",
+            crate::remote::UNARY_TIMEOUT,
+            client.get_tree_state(service::BlockId {
                 height: u64::from(birthday_height) - 1,
                 hash: vec![],
-            })
-            .await
-            .map_err(|e| WatcherError::Remote(format!("get_tree_state: {e}")))?
-            .into_inner();
+            }),
+        )
+        .await?
+        .into_inner();
         let chain_state: ChainState = tree_state
             .to_chain_state()
             .map_err(|e| WatcherError::Remote(format!("tree state: {e}")))?;

@@ -398,14 +398,16 @@ pub async fn broadcast_signed(
             .map_err(|e| WatcherError::Internal(anyhow::anyhow!("extract task: {e}")))??
     };
     let mut client = state.client.lock().await;
-    let resp = client
-        .send_transaction(service::RawTransaction {
+    let resp = crate::remote::with_timeout(
+        "send_transaction",
+        crate::remote::UNARY_TIMEOUT,
+        client.send_transaction(service::RawTransaction {
             data: raw,
             height: 0,
-        })
-        .await
-        .map_err(|e| WatcherError::Remote(format!("send_transaction: {e}")))?
-        .into_inner();
+        }),
+    )
+    .await?
+    .into_inner();
     // A rejection is decided by ground truth, never by its text: the broadcast succeeded
     // iff the node knows the offered transaction (mined or in its mempool).
     let node_knows_tx = if resp.error_code != 0 {
@@ -457,7 +459,12 @@ pub async fn node_knows_tx(
     txid: &str,
 ) -> Result<bool, WatcherError> {
     let filter = tx_filter(txid)?;
-    Ok(match client.get_transaction(filter).await {
+    let lookup = crate::remote::with_timeout(
+        "get_transaction",
+        crate::remote::UNARY_TIMEOUT,
+        client.get_transaction(filter),
+    );
+    Ok(match lookup.await {
         Ok(r) => !r.into_inner().data.is_empty(),
         Err(e) => {
             tracing::debug!(%txid, error = %e, "node does not return the sweep transaction");

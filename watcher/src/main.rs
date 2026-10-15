@@ -12,12 +12,17 @@ use ztab_watcher::{
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
     let cfg = Arc::new(Config::from_env()?);
     let wallet = Arc::new(WalletStore::open(&cfg)?);
     let meta = Arc::new(MetaStore::open(&cfg)?);
-    let client = Arc::new(tokio::sync::Mutex::new(remote::connect(&cfg).await?));
+    // Never fails on an unreachable lightwalletd: the loops retry with backoff while the
+    // HTTP server serves health and stored facts.
+    let client = remote::startup_client(&cfg).await?;
     let state = AppState {
         cfg: cfg.clone(),
         wallet,

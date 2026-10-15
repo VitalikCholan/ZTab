@@ -94,11 +94,13 @@ impl Drop for Subscribed<'_> {
 pub async fn mempool_pass(state: &AppState) -> Result<MempoolPass, WatcherError> {
     // Own connection: the shared client is held by sync/sweep for seconds at a time.
     let mut client = crate::remote::connect(&state.cfg).await?;
-    let mut stream = client
-        .get_mempool_stream(service::Empty {})
-        .await
-        .map_err(|e| WatcherError::Remote(format!("get_mempool_stream: {e}")))?
-        .into_inner();
+    let mut stream = crate::remote::with_timeout(
+        "get_mempool_stream",
+        crate::remote::STREAM_START_TIMEOUT,
+        client.get_mempool_stream(service::Empty {}),
+    )
+    .await?
+    .into_inner();
     state
         .health
         .mempool_subscribed
