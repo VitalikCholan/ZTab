@@ -88,7 +88,7 @@ async fn sweep_and_broadcast_refuse_a_tab_that_is_not_open() {
         .meta
         .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), 10)
         .unwrap();
-    for s in [TabState::Sweeping, TabState::Closed, TabState::Abandoned] {
+    for s in [TabState::Sweeping, TabState::Abandoned] {
         // The stored state decides, even when the caller's copy still says open.
         state.meta.set_tab_state(tab.tab_id, s).unwrap();
         assert_eq!(tab.state, TabState::Open);
@@ -232,4 +232,52 @@ async fn sweep_request_with_a_memo_is_refused() {
         .unwrap();
     assert!(String::from_utf8_lossy(&body).contains("memo is not supported"));
     assert!(state.meta.get_sweep(tab.tab_id).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_closed_tab_passes_the_state_gate_for_a_new_sweep() {
+    let state = common::offline_state().await;
+    let tab = fixture_tab(&state).await;
+    state
+        .meta
+        .put_sweep(tab.tab_id, &fixture_txid("sweep.proved.pczt"), 10)
+        .unwrap();
+    state
+        .meta
+        .set_tab_state(tab.tab_id, TabState::Closed)
+        .unwrap();
+    // Past the state check: the next refusal is about the request itself, not the state.
+    let r = create_proved_pczt(&state, &tab, "utest1x").await;
+    assert!(matches!(r, Err(WatcherError::Unprocessable(_))), "{r:?}");
+    let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.proved.pczt")).await;
+    assert!(matches!(r, Err(WatcherError::Unprocessable(_))), "{r:?}");
+    assert_eq!(
+        state.meta.get_tab(tab.tab_id).unwrap().unwrap().state,
+        TabState::Closed
+    );
+}
+
+#[tokio::test]
+async fn a_repeated_broadcast_of_the_sent_sweep_returns_its_txid() {
+    let state = common::offline_state().await;
+    let tab = fixture_tab(&state).await;
+    let offered = fixture_txid("sweep.proved.pczt");
+    state.meta.put_sweep(tab.tab_id, &offered, 10).unwrap();
+    state.meta.mark_broadcast(tab.tab_id, &offered).unwrap();
+    for s in [TabState::Sweeping, TabState::Closed] {
+        state.meta.set_tab_state(tab.tab_id, s).unwrap();
+        // Nothing is sent (the offline client would fail): the earlier success is repeated.
+        let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.signed.pczt")).await;
+        assert_eq!(r.unwrap(), offered, "{s:?}");
+        // Another transaction is still a mismatch.
+        let r = broadcast_signed(&state, &tab, &fixture_b64("sweep2.proved.pczt")).await;
+        assert!(matches!(r, Err(WatcherError::Conflict(_))), "{s:?}: {r:?}");
+    }
+    // Open again (the sweep expired): the old offer cannot be reused.
+    state
+        .meta
+        .set_tab_state(tab.tab_id, TabState::Open)
+        .unwrap();
+    let r = broadcast_signed(&state, &tab, &fixture_b64("sweep.signed.pczt")).await;
+    assert!(matches!(r, Err(WatcherError::Conflict(_))), "{r:?}");
 }

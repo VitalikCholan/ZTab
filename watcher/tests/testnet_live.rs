@@ -1033,6 +1033,8 @@ async fn full_tab_lifecycle_on_testnet() {
     let s = &offer["summary"];
     eprintln!("sweep offer: {s}");
     assert_eq!(s["inputs_zat"], PAYMENT_ZAT);
+    // The payment is mined, so nothing is left in the mempool for this tab.
+    assert_eq!(s["pending_mempool_zat"], 0);
     assert_eq!(
         s["output_zat"].as_u64().unwrap() + s["fee_zat"].as_u64().unwrap(),
         PAYMENT_ZAT

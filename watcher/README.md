@@ -16,7 +16,7 @@ before changing crate versions, confirmation rules or anything that touches keys
 
 ```sh
 ZTAB_API_TOKEN=change-me ZTAB_DATA_DIR=./data cargo run --release
-# logs are JSON on stdout; RUST_LOG=ztab_watcher=debug for more
+# logs are JSON on stdout at info by default; RUST_LOG overrides (e.g. RUST_LOG=ztab_watcher=debug)
 curl localhost:8787/v1/health
 ```
 
@@ -27,7 +27,7 @@ curl localhost:8787/v1/health
 | `ZTAB_API_TOKEN` | **required** | Bearer token the API must send (`Authorization: Bearer …`). |
 | `ZTAB_DATA_DIR` | **required** | Directory for the wallet DB (`wallet.sqlite`), tab metadata, the compact-block cache and Tor state. |
 | `ZTAB_NETWORK` | `test` | `test` or `main`. |
-| `ZTAB_LIGHTWALLETD_URL` | `https://testnet.zec.rocks:443` | lightwalletd gRPC endpoint. |
+| `ZTAB_LIGHTWALLETD_URL` | `https://testnet.zec.rocks:443` | lightwalletd gRPC endpoint. Must be `https://`; plaintext `http://` is accepted only for loopback or private-range hosts (127/8, ::1, 10/8, 172.16/12, 192.168/16, `localhost`). |
 | `ZTAB_CONNECTION` | `direct` on testnet, `tor` on mainnet | `direct` or `tor` (embedded Arti client). |
 | `ZTAB_CONFIRMATIONS_PAID` | `3` | Confirmations at which a payment counts as paid. |
 | `ZTAB_CONFIRMATIONS_SWEEP` | `10` | Confirmations every note needs before a sweep can be offered. Also the depth at which a sweep moves the tab to `closed`. |
@@ -42,9 +42,9 @@ Every route except `GET /v1/health` requires the bearer token.
 |---|---|
 | `POST /v1/tabs` | Register a tab: `{tab_id, ufvk, birthday, participants_count}`. The birthday must be at least `tip - 1000`. Returns the participants' Orchard-only addresses. Idempotent. |
 | `GET /v1/tabs/{id}` | Payment facts per participant, plus `state`, `synced_height`, `tip_height` and `stale`. |
-| `POST /v1/tabs/{id}/sweep` | Offer a proved PCZT that sweeps the whole tab to `recipient_address`, which must be a unified address of this network with an Orchard or Sapling receiver (transparent and TEX addresses get 422). A body with a `memo` gets 422 (`memo is not supported`). Returns 409 until every note has `ZTAB_CONFIRMATIONS_SWEEP` confirmations. The offered PCZT is not stored; only its txid and expiry height are. |
-| `POST /v1/tabs/{id}/broadcast` | Takes the signed PCZT of the current offer, extracts it and broadcasts it. The tab moves to `sweeping`. |
-| `GET /v1/tabs/{id}/sweep` | Sweep progress: `txid`, `mined_height`, `confirmations` and `state`. Moves `sweeping → closed` at sweep depth. |
+| `POST /v1/tabs/{id}/sweep` | Offer a proved PCZT that sweeps the whole tab to `recipient_address`, which must be a unified address of this network with an Orchard or Sapling receiver (transparent and TEX addresses get 422). A body with a `memo` gets 422 (`memo is not supported`). Returns 409 until every note has `ZTAB_CONFIRMATIONS_SWEEP` confirmations. Allowed from `open` and from `closed` (money paid during or after a close is swept the same way; nothing is swept automatically). `summary` carries `inputs_zat`, `output_zat`, `fee_zat`, `expiry_height`, `txid` and `pending_mempool_zat` (payments seen in the mempool but not mined, which this sweep would leave behind). The offered PCZT is not stored; only its txid and expiry height are. |
+| `POST /v1/tabs/{id}/broadcast` | Takes the signed PCZT of the current offer, extracts it and broadcasts it. The tab moves to `sweeping`. Idempotent: resubmitting the PCZT of a sweep already broadcast returns 200 with its `txid`. |
+| `GET /v1/tabs/{id}/sweep` | Sweep progress: `txid`, `mined_height`, `confirmations` and `state`. Moves `sweeping → closed` at sweep depth and `sweeping → open` after an unmined sweep expires; every sync pass applies the same advancement. |
 | `GET /v1/health` | Tip, synced height, lag and mempool subscription. |
 
 ## Tests

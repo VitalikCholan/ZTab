@@ -130,6 +130,35 @@ pub fn fresh_sightings(
     Ok(out)
 }
 
+/// Value of the sightings whose transaction is not mined for the tab yet: money on its way
+/// that a sweep made now would leave behind.
+pub fn pending_mempool_zat(sightings: &[Sighting], notes: &[NoteRow]) -> u64 {
+    let mined: HashSet<&str> = notes
+        .iter()
+        .filter(|n| n.mined_height.is_some())
+        .map(|n| n.txid.as_str())
+        .collect();
+    sightings
+        .iter()
+        .filter(|s| !mined.contains(s.txid.as_str()))
+        .map(|s| s.value_zat)
+        .sum()
+}
+
+/// [`pending_mempool_zat`] over the tab's fresh sightings and its wallet notes.
+pub fn tab_pending_mempool_zat(
+    wallet: &WalletStore,
+    meta: &MetaStore,
+    cfg: &Config,
+    tab: &TabRow,
+) -> Result<u64, WatcherError> {
+    let cutoff =
+        crate::meta::sighting_cutoff(time::OffsetDateTime::now_utc(), cfg.block_interval_seconds);
+    let sightings = fresh_sightings(meta.sightings_for_tab(tab.tab_id)?, cutoff)?;
+    let notes = note_rows(wallet, tab.account_uuid)?;
+    Ok(pending_mempool_zat(&sightings, &notes))
+}
+
 fn werr(e: impl std::fmt::Display) -> WatcherError {
     WatcherError::Wallet(e.to_string())
 }
@@ -354,6 +383,22 @@ mod tests {
         assert_eq!(rows[1].txid, hex::encode(display));
         assert_eq!(rows[0].value_zat, 55);
         assert_eq!(rows[0].mined_height, None);
+    }
+
+    #[test]
+    fn pending_mempool_zat_counts_sightings_not_yet_mined() {
+        let s = |txid: &str, idx: u32, v: u64| Sighting {
+            txid: txid.into(),
+            participant_index: idx,
+            value_zat: v,
+            first_seen_at: "t".into(),
+        };
+        let sightings = vec![s("aa", 0, 100), s("bb", 1, 40), s("cc", 0, 7)];
+        // "aa" is mined; "bb" is in the wallet but unmined; "cc" only sighted.
+        let notes = vec![row(0, 100, Some(90), "aa"), row(1, 40, None, "bb")];
+        assert_eq!(pending_mempool_zat(&sightings, &notes), 47);
+        assert_eq!(pending_mempool_zat(&[], &notes), 0);
+        assert_eq!(pending_mempool_zat(&sightings, &[]), 147);
     }
 
     #[test]

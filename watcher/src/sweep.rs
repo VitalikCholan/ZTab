@@ -50,6 +50,10 @@ pub struct SweepSummary {
     pub fee_zat: u64,
     pub expiry_height: u32,
     pub txid: String,
+    /// Payments to the tab seen in the mempool but not mined yet: this sweep leaves them
+    /// behind (they can be swept later, from `closed` too). The browser warns before
+    /// signing; nothing is swept automatically.
+    pub pending_mempool_zat: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -183,7 +187,9 @@ fn create_proved_pczt_blocking(
     tab: &TabRow,
     recipient: &str,
 ) -> Result<SweepOffer, WatcherError> {
-    if tab.state != TabState::Open {
+    // `closed` is not terminal for funds: money paid during or after a close is swept the
+    // same way (closed → sweeping → closed).
+    if !matches!(tab.state, TabState::Open | TabState::Closed) {
         return Err(WatcherError::Conflict(format!(
             "tab state is {}",
             tab.state.as_str()
@@ -272,6 +278,8 @@ fn create_proved_pczt_blocking(
     };
     // The wallet lock is released: proving is CPU-bound and must not stall sync or reads.
     let created = started.elapsed();
+    let pending_mempool_zat =
+        crate::facts::tab_pending_mempool_zat(&state.wallet, &state.meta, &state.cfg, tab)?;
     let txid = txid_of(pczt.clone())?;
     let expiry_height = *pczt.global().expiry_height();
     let pczt = prove(pczt)?;
@@ -290,6 +298,7 @@ fn create_proved_pczt_blocking(
             fee_zat,
             expiry_height,
             txid,
+            pending_mempool_zat,
         },
     })
 }
@@ -375,21 +384,15 @@ pub async fn broadcast_signed(
 ) -> Result<String, WatcherError> {
     let _guard = state.sweep_locks.try_acquire(tab.tab_id)?;
     let tab = reload(state, tab.tab_id)?;
-    if tab.state != TabState::Open {
-        return Err(WatcherError::Conflict(format!(
-            "tab state is {}",
-            tab.state.as_str()
-        )));
+    let not_broadcastable =
+        || WatcherError::Conflict(format!("tab state is {}", tab.state.as_str()));
+    if tab.state == TabState::Abandoned {
+        return Err(not_broadcastable());
     }
     let offered = state
         .meta
         .get_sweep(tab.tab_id)?
         .ok_or_else(|| WatcherError::Conflict("no sweep offered for this tab".into()))?;
-    if offered.broadcast_at.is_some() {
-        return Err(WatcherError::Conflict(
-            "the offered sweep was already broadcast; request a new one".into(),
-        ));
-    }
     // URL-safe unpadded is what offers use; standard base64 (e.g. browser `btoa`) is
     // accepted too.
     let b64 = pczt_b64.trim();
@@ -402,6 +405,18 @@ pub async fn broadcast_signed(
         return Err(WatcherError::Conflict(
             "signed PCZT does not match the offered sweep".into(),
         ));
+    }
+    if offered.broadcast_at.is_some() {
+        // A retry of a broadcast that already succeeded: same answer, nothing resent.
+        if matches!(tab.state, TabState::Sweeping | TabState::Closed) {
+            return Ok(offered.txid);
+        }
+        return Err(WatcherError::Conflict(
+            "the offered sweep was already broadcast; request a new one".into(),
+        ));
+    }
+    if !matches!(tab.state, TabState::Open | TabState::Closed) {
+        return Err(not_broadcastable());
     }
     // Already in the wallet means an earlier attempt extracted it and its send may have
     // reached the network even though that attempt failed (e.g. a transport error).
@@ -589,9 +604,10 @@ fn confirmations(tip: u32, mined: Option<u32>) -> u32 {
     mined.and_then(|h| tip.checked_sub(h)).map_or(0, |d| d + 1)
 }
 
-/// `open`/`sweeping` → `closed` once the offered sweep is mined `required` deep;
-/// `open` → `sweeping` once it is mined at all (shallower); `sweeping` → `open` once the
-/// scanned height is past its expiry without it having been mined. Other states never move.
+/// `open`/`closed`/`sweeping` → `closed` once the offered sweep is mined `required` deep;
+/// `open`/`closed` → `sweeping` once it is mined at all (shallower; for `closed`, a new
+/// offer sweeping money paid after the close); `sweeping` → `open` once the scanned height
+/// is past its expiry without it having been mined. `abandoned` never moves.
 fn next_state(
     current: TabState,
     mined: Option<u32>,
@@ -600,7 +616,7 @@ fn next_state(
     synced: u32,
     expiry_height: u32,
 ) -> TabState {
-    if !matches!(current, TabState::Open | TabState::Sweeping) {
+    if current == TabState::Abandoned {
         return current;
     }
     match mined {
@@ -691,11 +707,22 @@ mod tests {
         // a required depth of 0 still needs the sweep mined
         assert_eq!(next_state(Sweeping, None, 0, 0, 100, 140), Sweeping);
         assert_eq!(next_state(Sweeping, Some(100), 1, 0, 100, 140), Closed);
-        // other states never move here
-        for s in [Closed, Abandoned] {
-            assert_eq!(next_state(s, Some(1), 50, 10, 500, 2), s);
-            assert_eq!(next_state(s, None, 0, 10, 500, 2), s);
-        }
+        // abandoned never moves
+        assert_eq!(next_state(Abandoned, Some(1), 50, 10, 500, 2), Abandoned);
+        assert_eq!(next_state(Abandoned, None, 0, 10, 500, 2), Abandoned);
+    }
+
+    #[test]
+    fn closed_tab_can_be_swept_again() {
+        use TabState::*;
+        // The sweep that closed it stays deep: still closed.
+        assert_eq!(next_state(Closed, Some(100), 50, 10, 149, 140), Closed);
+        // A new, unbroadcast or unmined offer leaves it closed, before and after expiry.
+        assert_eq!(next_state(Closed, None, 0, 10, 100, 140), Closed);
+        assert_eq!(next_state(Closed, None, 0, 10, 500, 140), Closed);
+        // The new offer mined: sweeping, then closed again at depth.
+        assert_eq!(next_state(Closed, Some(200), 1, 10, 200, 240), Sweeping);
+        assert_eq!(next_state(Sweeping, Some(200), 10, 10, 209, 240), Closed);
     }
 
     #[test]
