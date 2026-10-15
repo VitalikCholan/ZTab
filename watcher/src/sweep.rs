@@ -406,13 +406,15 @@ pub async fn broadcast_signed(
         .await
         .map_err(|e| WatcherError::Remote(format!("send_transaction: {e}")))?
         .into_inner();
+    // A rejection is decided by ground truth, never by its text: the broadcast succeeded
+    // iff the node knows the offered transaction (mined or in its mempool).
+    let node_knows_tx = if resp.error_code != 0 {
+        node_knows_tx(&mut client, &offered.txid).await?
+    } else {
+        false
+    };
     drop(client);
-    if resp.error_code != 0 && !(retry && already_known(&resp.error_message)) {
-        return Err(WatcherError::Remote(format!(
-            "lightwalletd rejected the transaction: {} {}",
-            resp.error_code, resp.error_message
-        )));
-    }
+    send_outcome(resp.error_code, &resp.error_message, node_knows_tx)?;
     state.meta.mark_broadcast(tab.tab_id, &offered.txid)?;
     state.meta.set_tab_state(tab.tab_id, TabState::Sweeping)?;
     tracing::info!(tab = %tab.tab_id, "sweep broadcast");
@@ -420,12 +422,48 @@ pub async fn broadcast_signed(
     Ok(offered.txid)
 }
 
-/// A node's rejection of a transaction it already has (zcashd: "txn-already-in-mempool",
-/// "txn-already-known", "transaction already in block chain"; zebrad: "... already exists
-/// in the mempool / already in state").
-fn already_known(message: &str) -> bool {
-    let m = message.to_ascii_lowercase();
-    m.contains("already")
+/// The outcome of `SendTransaction`: accepted, or rejected but the node holds the offered
+/// transaction anyway (an earlier attempt reached it). The node's message is reported, never
+/// interpreted.
+fn send_outcome(
+    error_code: i32,
+    error_message: &str,
+    node_knows_tx: bool,
+) -> Result<(), WatcherError> {
+    if error_code == 0 || node_knows_tx {
+        Ok(())
+    } else {
+        Err(WatcherError::Remote(format!(
+            "lightwalletd rejected the transaction: {error_code} {error_message}"
+        )))
+    }
+}
+
+/// `GetTransaction` filter for display-hex `txid` (the request takes internal byte order).
+fn tx_filter(txid: &str) -> Result<service::TxFilter, WatcherError> {
+    let id = TxId::from_hex(txid)
+        .ok_or_else(|| WatcherError::Wallet(format!("txid {txid} is not hex")))?;
+    Ok(service::TxFilter {
+        block: None,
+        index: 0,
+        hash: id.as_ref().to_vec(),
+    })
+}
+
+/// Whether the node returns transaction `txid`, mined or from its mempool. Any lookup
+/// failure (not found, transport) counts as "does not know it".
+pub async fn node_knows_tx(
+    client: &mut crate::remote::LwdClient,
+    txid: &str,
+) -> Result<bool, WatcherError> {
+    let filter = tx_filter(txid)?;
+    Ok(match client.get_transaction(filter).await {
+        Ok(r) => !r.into_inner().data.is_empty(),
+        Err(e) => {
+            tracing::debug!(%txid, error = %e, "node does not return the sweep transaction");
+            false
+        }
+    })
 }
 
 /// Finalizes spends, verifies proofs and signatures, stores the transaction in the wallet
@@ -601,16 +639,37 @@ mod tests {
     }
 
     #[test]
-    fn already_known_rejections_are_recognized() {
+    fn rejected_send_succeeds_only_if_the_node_holds_the_tx() {
+        // Accepted outright.
+        assert!(send_outcome(0, "", false).is_ok());
+        // Rejected, but the node returns the offered tx (an earlier attempt reached it).
+        assert!(send_outcome(-25, "txn-already-in-mempool", true).is_ok());
+        assert!(send_outcome(-27, "transaction already in block chain", true).is_ok());
+        // Rejected and unknown to the node: a failure whatever the text says, including
+        // zebrad's spend conflict (which contains "already") and zcashd's.
         for m in [
-            "txn-already-in-mempool",
+            "transaction rejected because another transaction in the mempool has already spent some of its inputs",
             "txn-already-known",
-            "transaction already in block chain",
-            "Transaction already exists in the mempool",
+            "bad-txns-inputs-spent",
+            "",
         ] {
-            assert!(already_known(m), "{m}");
+            let r = send_outcome(-26, m, false);
+            assert!(matches!(r, Err(WatcherError::Remote(_))), "{m}: {r:?}");
         }
-        assert!(!already_known("bad-txns-inputs-spent"));
-        assert!(!already_known(""));
+    }
+
+    #[test]
+    fn node_lookup_is_by_the_offered_txid_in_internal_byte_order() {
+        let offered = pczt_txid(&fixture("sweep.proved.pczt")).unwrap();
+        let f = tx_filter(&offered).unwrap();
+        let mut expected = hex::decode(&offered).unwrap();
+        expected.reverse();
+        assert_eq!(f.hash, expected);
+        assert_eq!((f.block, f.index), (None, 0));
+        assert_eq!(
+            TxId::from_bytes(f.hash.try_into().unwrap()).to_string(),
+            offered
+        );
+        assert!(tx_filter("zz").is_err());
     }
 }

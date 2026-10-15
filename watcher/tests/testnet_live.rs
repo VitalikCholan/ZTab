@@ -718,3 +718,29 @@ async fn broadcast_rejects_mismatched_pczt() {
     assert_eq!(st["mined_height"], serde_json::Value::Null);
     assert_eq!(st["confirmations"], 0);
 }
+
+#[tokio::test]
+#[ignore]
+async fn node_lookup_finds_the_mined_spike_sweep_but_not_an_unbroadcast_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = common::testnet_config(tmp.path());
+    let mut client = remote::connect(&cfg).await.unwrap();
+    let read = |n: &str| {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(n),
+        )
+        .unwrap()
+    };
+    // The spike's sweep was mined on testnet.
+    let mined = ztab_watcher::sweep::pczt_txid(&read("sweep.proved.pczt")).unwrap();
+    assert!(ztab_watcher::sweep::node_knows_tx(&mut client, &mined)
+        .await
+        .unwrap());
+    // A txid no node has seen.
+    let unknown = "00".repeat(31) + "01";
+    assert!(!ztab_watcher::sweep::node_knows_tx(&mut client, &unknown)
+        .await
+        .unwrap());
+}
