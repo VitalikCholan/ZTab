@@ -101,7 +101,10 @@ async fn connect_in_background(cfg: Arc<Config>, client: Arc<tokio::sync::Mutex<
     }
 }
 
+/// Parses the lightwalletd URL, refusing plaintext to a non-local host (see
+/// [`crate::config::check_lightwalletd_url`]) even if the config check was bypassed.
 fn parse_uri(url: &str) -> Result<Uri, WatcherError> {
+    crate::config::check_lightwalletd_url(url)?;
     url.parse()
         .map_err(|e| WatcherError::Config(format!("ZTAB_LIGHTWALLETD_URL: {e}")))
 }
@@ -118,6 +121,8 @@ fn connect_direct(url: &str) -> Result<LwdClient, WatcherError> {
         .http2_keep_alive_interval(KEEPALIVE_INTERVAL)
         .keep_alive_timeout(KEEPALIVE_TIMEOUT)
         .keep_alive_while_idle(true);
+    // TLS exactly when the URL says https; a TLS failure is a `Remote` error, never a
+    // retry over plaintext.
     if uri.scheme_str() == Some("https") {
         let tls = ClientTlsConfig::new()
             .domain_name(host)
@@ -200,5 +205,16 @@ mod tests {
         let r = latest_height(&mut client).await;
         assert!(matches!(r, Err(WatcherError::Remote(_))), "{r:?}");
         assert!(connect_direct("not a url").is_err());
+        // Plaintext to a public host is refused before anything is dialed.
+        assert!(matches!(
+            connect_direct("http://testnet.zec.rocks:443"),
+            Err(WatcherError::Config(_))
+        ));
+        // A failed TLS connect is a Remote error (no plaintext retry exists to fall back to).
+        let mut tls = connect_direct("https://127.0.0.1:1").unwrap();
+        assert!(matches!(
+            latest_height(&mut tls).await,
+            Err(WatcherError::Remote(_))
+        ));
     }
 }
