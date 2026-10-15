@@ -84,6 +84,10 @@ CREATE TABLE IF NOT EXISTS mempool_sightings (
 CREATE TABLE IF NOT EXISTS tx_sources (
   txid TEXT PRIMARY KEY, transparent_source INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tab_addresses (
+  tab_id TEXT NOT NULL, participant_index INTEGER NOT NULL, address TEXT NOT NULL,
+  PRIMARY KEY (tab_id, participant_index)
+);
 CREATE TABLE IF NOT EXISTS sweeps (
   tab_id TEXT PRIMARY KEY, txid TEXT NOT NULL,
   expiry_height INTEGER NOT NULL, created_at TEXT NOT NULL, broadcast_at TEXT
@@ -175,6 +179,43 @@ impl MetaStore {
             )
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         Ok(())
+    }
+
+    /// Stores the tab's participant addresses (index, encoded address), replacing any
+    /// stored for the same indices.
+    pub fn put_tab_addresses(
+        &self,
+        tab_id: Uuid,
+        addresses: &[(u32, String)],
+    ) -> Result<(), WatcherError> {
+        let mut conn = self.conn();
+        let tx = conn
+            .transaction()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        for (index, address) in addresses {
+            tx.execute(
+                "INSERT OR REPLACE INTO tab_addresses (tab_id, participant_index, address) VALUES (?1, ?2, ?3)",
+                params![tab_id.to_string(), index, address],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        }
+        tx.commit().map_err(|e| WatcherError::Wallet(e.to_string()))
+    }
+
+    /// The tab's stored participant addresses, by index.
+    pub fn tab_addresses(&self, tab_id: Uuid) -> Result<Vec<(u32, String)>, WatcherError> {
+        let conn = self.conn();
+        let mut st = conn
+            .prepare(
+                "SELECT participant_index, address FROM tab_addresses WHERE tab_id = ?1 ORDER BY participant_index",
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        let rows = st
+            .query_map(params![tab_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(rows)
     }
 
     pub fn sightings_for_tab(&self, tab_id: Uuid) -> Result<Vec<Sighting>, WatcherError> {

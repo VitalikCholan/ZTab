@@ -126,6 +126,12 @@ async fn register_creates_idempotent_tab_with_addresses() {
         assert_eq!(a["index"], i as u64);
         assert!(a["address"].as_str().unwrap().starts_with("utest1"));
     }
+    // Registration stores them in `tab_addresses`, where fact reads take them from.
+    let stored = state.meta.tab_addresses(tab_id).unwrap();
+    assert_eq!(stored.len(), 3);
+    for (i, a) in addrs.iter().enumerate() {
+        assert_eq!(a["address"], stored[i].1.as_str());
+    }
 
     let r2 = post(register_body(tab_id, common::FIXTURE_UFVK, birthday, 3))
         .await

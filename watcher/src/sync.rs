@@ -5,7 +5,11 @@
 //! (`sync_wallet`); wallet `db()`/`cache()` and meta mutexes are only taken inside
 //! synchronous helpers that return before the next `.await`.
 
-use std::{path::Path, sync::atomic::Ordering, time::Duration};
+use std::{
+    path::Path,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use futures_util::TryStreamExt;
 use orchard::tree::MerkleHashOrchard;
@@ -143,7 +147,7 @@ pub async fn sync_once(state: &AppState) -> Result<SyncReport, WatcherError> {
 /// range, reorg rewinds; records tip and synced height in `health`. The core of
 /// `sync_once`, reusable for any wallet (the live tests sync their payer wallet with it).
 pub async fn sync_wallet(
-    wallet: &WalletStore,
+    wallet: &Arc<WalletStore>,
     client: &mut LwdClient,
     health: &HealthState,
 ) -> Result<SyncReport, WatcherError> {
@@ -178,7 +182,23 @@ pub async fn sync_wallet(
         }
         let metas = download_blocks(client, wallet, &range).await?;
         let chain_state = download_chain_state(client, range.block_range().start - 1).await?;
-        let outcome = scan_batch(wallet, &chain_state, &range, tip);
+        // Scanning is CPU-bound and holds `db()`/`cache()`: it runs on a blocking thread,
+        // taking both guards inside, so async workers keep serving requests meanwhile.
+        let outcome = {
+            let (wallet, range) = (wallet.clone(), range.clone());
+            tokio::task::spawn_blocking(move || scan_batch(&wallet, &chain_state, &range, tip))
+                .await
+                .unwrap_or_else(|e| {
+                    Err(WatcherError::Internal(anyhow::anyhow!(
+                        "scan task {}",
+                        if e.is_panic() {
+                            "panicked"
+                        } else {
+                            "was cancelled"
+                        }
+                    )))
+                })
+        };
         // Scanned (or rejected) blocks are not needed on disk any more either way.
         delete_cached_blocks(wallet.blocks_dir(), &metas).await;
         if let ScanOutcome::Rewound(h) = outcome? {

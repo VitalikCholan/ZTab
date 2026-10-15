@@ -212,13 +212,15 @@ impl WalletStore {
     }
 
     /// The participant index in `0..participants` whose Orchard-only address has `addr` as
-    /// its Orchard receiver. Receivers are derived from the account's UFVK exactly as
-    /// `participant_addresses` derives them, without writing to the wallet, and cached.
+    /// its Orchard receiver. On a cache miss the receivers are decoded from `addresses`
+    /// (the tab's stored participant addresses, by index) and cached; the wallet database
+    /// is not touched.
     pub fn index_for_orchard_address(
         &self,
         account: AccountUuid,
         participants: u32,
         addr: &orchard::Address,
+        addresses: impl FnOnce() -> Result<Vec<(u32, String)>, WatcherError>,
     ) -> Result<Option<u32>, WatcherError> {
         let lookup = |receivers: &[orchard::Address]| {
             receivers
@@ -238,29 +240,32 @@ impl WalletStore {
                 }
             }
         }
-        let ufvk = self
-            .db()
-            .get_account(account)
-            .map_err(|e| WatcherError::Wallet(format!("get_account: {e:?}")))?
-            .and_then(|a| a.ufvk().cloned())
-            .ok_or_else(|| WatcherError::Wallet("account has no UFVK".into()))?;
-        let request = UnifiedAddressRequest::custom(
-            ReceiverRequirement::Require,
-            ReceiverRequirement::Omit,
-            ReceiverRequirement::Omit,
-        )
-        .map_err(|e| WatcherError::Wallet(format!("address request: {e:?}")))?;
-        let receivers = (0..participants)
-            .map(|i| {
-                ufvk.address(DiversifierIndex::from(i), request)
-                    .map_err(|e| {
-                        WatcherError::Wallet(format!("derive address at index {i}: {e:?}"))
-                    })?
-                    .orchard()
-                    .copied()
-                    .ok_or_else(|| WatcherError::Wallet(format!("no orchard receiver at {i}")))
+        let receivers = addresses()?
+            .into_iter()
+            .enumerate()
+            .map(|(pos, (i, encoded))| {
+                if pos != i as usize {
+                    return Err(WatcherError::Wallet(format!(
+                        "participant addresses are not contiguous at index {i}"
+                    )));
+                }
+                match zcash_keys::address::Address::decode(&self.network, &encoded) {
+                    Some(zcash_keys::address::Address::Unified(ua)) => ua
+                        .orchard()
+                        .copied()
+                        .ok_or_else(|| WatcherError::Wallet(format!("no orchard receiver at {i}"))),
+                    _ => Err(WatcherError::Wallet(format!(
+                        "stored participant address {i} is not a unified address"
+                    ))),
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if receivers.len() < participants as usize {
+            return Err(WatcherError::Wallet(format!(
+                "{} participant addresses for {participants} participants",
+                receivers.len()
+            )));
+        }
         let index = lookup(&receivers);
         self.orchard_receivers
             .lock()

@@ -200,6 +200,31 @@ pub fn note_rows(wallet: &WalletStore, account_uuid: Uuid) -> Result<Vec<NoteRow
         .collect()
 }
 
+/// The tab's participant addresses from `ztab.sqlite`. Registration stores them; a tab
+/// registered before that (or interrupted between its rows) is backfilled once here, which
+/// is the only path that derives them through the wallet (and takes its `db()` lock).
+pub fn ensure_tab_addresses(
+    wallet: &WalletStore,
+    meta: &MetaStore,
+    tab: &TabRow,
+) -> Result<Vec<(u32, String)>, WatcherError> {
+    let stored = meta.tab_addresses(tab.tab_id)?;
+    let complete = stored.len() == tab.participants_count as usize
+        && stored
+            .iter()
+            .enumerate()
+            .all(|(i, (idx, _))| *idx as usize == i);
+    if complete {
+        return Ok(stored);
+    }
+    let derived = wallet.participant_addresses(
+        crate::wallet::account_uuid(tab.account_uuid),
+        tab.participants_count,
+    )?;
+    meta.put_tab_addresses(tab.tab_id, &derived)?;
+    Ok(derived)
+}
+
 pub fn tab_facts(
     wallet: &WalletStore,
     meta: &MetaStore,
@@ -214,10 +239,7 @@ pub fn tab_facts(
         crate::meta::sighting_cutoff(time::OffsetDateTime::now_utc(), cfg.block_interval_seconds);
     let sightings = fresh_sightings(meta.sightings_for_tab(tab.tab_id)?, cutoff)?;
     let sources = meta.transparent_sources(notes.iter().map(|n| n.txid.as_str()))?;
-    let addresses = wallet.participant_addresses(
-        crate::wallet::account_uuid(tab.account_uuid),
-        tab.participants_count,
-    )?;
+    let addresses = ensure_tab_addresses(wallet, meta, tab)?;
     let mut participants = aggregate(tab.participants_count, &notes, &sightings, &sources, tip);
     for (p, (_, addr)) in participants.iter_mut().zip(addresses) {
         p.address = addr;

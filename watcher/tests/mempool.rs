@@ -81,32 +81,42 @@ async fn index_for_orchard_address_is_bounded_by_participant_count() {
         .clone();
     let at = |i: u32| fvk.address_at(i, zip32::Scope::External);
     let w = &state.wallet;
+    // Receivers come from the addresses registration stored in `tab_addresses`; a count
+    // beyond them (only possible for this test) is served from the wallet derivation.
+    let stored = || state.meta.tab_addresses(tab.tab_id);
+    assert_eq!(stored().unwrap().len(), 3);
     assert_eq!(
-        w.index_for_orchard_address(account, 3, &at(2)).unwrap(),
+        w.index_for_orchard_address(account, 3, &at(2), stored)
+            .unwrap(),
         Some(2)
     );
     assert_eq!(
-        w.index_for_orchard_address(account, 3, &at(0)).unwrap(),
+        w.index_for_orchard_address(account, 3, &at(0), stored)
+            .unwrap(),
         Some(0)
     );
     // Cached receivers beyond the requested count are not matched.
     assert_eq!(
-        w.index_for_orchard_address(account, 2, &at(2)).unwrap(),
+        w.index_for_orchard_address(account, 2, &at(2), stored)
+            .unwrap(),
         None
     );
     assert_eq!(
-        w.index_for_orchard_address(account, 3, &at(3)).unwrap(),
+        w.index_for_orchard_address(account, 3, &at(3), stored)
+            .unwrap(),
         None
     );
     // Growing the count re-derives.
     assert_eq!(
-        w.index_for_orchard_address(account, 4, &at(3)).unwrap(),
+        w.index_for_orchard_address(account, 4, &at(3), || w.participant_addresses(account, 4))
+            .unwrap(),
         Some(3)
     );
     // The internal (change) address is never a participant.
     let change = fvk.address_at(0u32, zip32::Scope::Internal);
     assert_eq!(
-        w.index_for_orchard_address(account, 4, &change).unwrap(),
+        w.index_for_orchard_address(account, 4, &change, || w.participant_addresses(account, 4))
+            .unwrap(),
         None
     );
 }

@@ -222,6 +222,7 @@ pub fn record_sightings(
             *out.account(),
             tab.participants_count,
             &note.recipient(),
+            || crate::facts::ensure_tab_addresses(&state.wallet, &state.meta, tab),
         )?
         else {
             continue;

@@ -111,10 +111,8 @@ pub async fn register_fixture_tab(
         })
         .unwrap();
     // Persist the participant addresses, as registration does.
-    state
-        .wallet
-        .participant_addresses(account, participants)
-        .unwrap();
+    let tab = state.meta.get_tab(tab_id).unwrap().unwrap();
+    ztab_watcher::facts::ensure_tab_addresses(&state.wallet, &state.meta, &tab).unwrap();
     tab_id
 }
 
@@ -183,10 +181,9 @@ pub async fn import_fixture_tab_offline(state: &ztab_watcher::http::AppState, pa
             created_at: time::OffsetDateTime::now_utc(),
         })
         .unwrap();
-    state
-        .wallet
-        .participant_addresses(account, participants)
-        .unwrap();
+    // Persist the participant addresses, as registration does.
+    let tab = state.meta.get_tab(tab_id).unwrap().unwrap();
+    ztab_watcher::facts::ensure_tab_addresses(&state.wallet, &state.meta, &tab).unwrap();
 }
 
 /// `ZTAB_TEST_SEED_HEX`, or `None` with a skip notice, so a plain
@@ -248,7 +245,7 @@ pub fn payer_birthday() -> u32 {
 /// `WalletStore` on a temp dir, synced with the watcher's own sync core. It pays like any
 /// Zcash wallet would; its keys never touch the watcher under test.
 pub struct FixtureWallet {
-    store: ztab_watcher::wallet::WalletStore,
+    store: std::sync::Arc<ztab_watcher::wallet::WalletStore>,
     client: tokio::sync::Mutex<ztab_watcher::remote::LwdClient>,
     health: ztab_watcher::http::HealthState,
     account: zcash_client_sqlite::AccountUuid,
@@ -268,7 +265,7 @@ impl FixtureWallet {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = cfg.clone();
         cfg.data_dir = dir.path().to_path_buf();
-        let store = ztab_watcher::wallet::WalletStore::open(&cfg).unwrap();
+        let store = std::sync::Arc::new(ztab_watcher::wallet::WalletStore::open(&cfg).unwrap());
         let mut client = ztab_watcher::remote::connect(&cfg).await.unwrap();
         let usk = payer_usk(seed_hex, &cfg.network);
         let address = payer_address(&usk, &cfg.network);

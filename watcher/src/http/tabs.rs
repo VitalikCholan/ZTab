@@ -80,7 +80,7 @@ pub async fn register(
         .wallet
         .import_tab_account(&mut client, body.tab_id, &body.ufvk, body.birthday)
         .await?;
-    state.meta.insert_tab(&TabRow {
+    let tab = TabRow {
         tab_id: body.tab_id,
         account_uuid: account.expose_uuid(),
         ufvk: body.ufvk.clone(),
@@ -88,11 +88,11 @@ pub async fn register(
         participants_count: body.participants_count,
         state: TabState::Open,
         created_at: time::OffsetDateTime::now_utc(),
-    })?;
+    };
+    state.meta.insert_tab(&tab)?;
     drop(client);
-    let addresses = state
-        .wallet
-        .participant_addresses(account, body.participants_count)?;
+    // Derived through the wallet (persisting them there) and stored in `tab_addresses`.
+    let addresses = crate::facts::ensure_tab_addresses(&state.wallet, &state.meta, &tab)?;
     tracing::info!(tab = %body.tab_id, participants = body.participants_count, "tab registered");
     Ok(out(body.tab_id, addresses))
 }
@@ -109,10 +109,7 @@ fn existing_registration(
             "tab_id already registered with a different ufvk".into(),
         ));
     }
-    let account = crate::wallet::account_uuid(existing.account_uuid);
-    let addresses = state
-        .wallet
-        .participant_addresses(account, existing.participants_count)?;
+    let addresses = crate::facts::ensure_tab_addresses(&state.wallet, &state.meta, &existing)?;
     Ok(Some(out(body.tab_id, addresses)))
 }
 
