@@ -32,7 +32,7 @@ imports are wasm-bindgen's `wbg.*` shims. Build: `crypto/build.sh` (Docker, name
 rebuilds fast). The signing rule above is `crypto/rust/src/pczt_ops.rs::sign`; the
 expectation check (`check_expectation`) runs before any signature. Live proof:
 `watcher/tests/testnet_live.rs::full_tab_lifecycle_on_testnet` with `ZTAB_TEST_SIGNER_CMD`
-pointing at `crypto/scripts/sign-stdin.ts` (passed on 2026-10-16: sign 62 ms in Node, sweep
+pointing at `crypto/scripts/sign-stdin.ts` (passed on 2026-10-16: derive + 2 inspects + sign 62 ms in Node, signing alone not measured separately; sweep
 mined after 85 s). The module's UFVK is Orchard-only (no Sapling feature), so it differs from a
 UFVK the watcher's own crates derive from the same seed; the tab key is the module's one, and
 the live test registers it and asserts the watcher's addresses equal the module's.
