@@ -1,6 +1,7 @@
 //! ZTab browser crypto module. The modules hold the logic and are tested natively; this file
 //! holds only the wasm-bindgen exports (spec §3). Nothing here logs.
 pub mod error;
+pub mod keys;
 pub mod network;
 
 use wasm_bindgen::prelude::*;
