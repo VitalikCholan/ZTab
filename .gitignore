@@ -4,6 +4,7 @@ node_modules/
 dist/
 build/
 *.wasm
+!crypto/pkg/*.wasm
 # secrets and wallets
 *.env
 .env.*

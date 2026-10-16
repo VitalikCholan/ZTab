@@ -1,0 +1,36 @@
+[package]
+name = "ztab-crypto"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+description = "ZTab browser crypto: tab keys, addresses, PCZT inspection and Ironwood signing (wasm32)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "=0.2.129"
+zcash_keys = { version = "=0.17.0-pre.1", default-features = false, features = ["std", "orchard", "zeroize"] }
+zcash_address = "=0.14.0-pre.1"
+zcash_protocol = "=0.11.0-pre.0"
+zcash_primitives = { version = "=0.31.0-pre.1", default-features = false, features = ["std"] }
+pczt = { version = "=0.10.0-pre.1", default-features = false, features = ["signer", "orchard"] }
+orchard = { version = "0.16.0", default-features = false }
+zip32 = "0.3"
+rand = { version = "0.10", default-features = false, features = ["std_rng"] }
+zeroize = "1.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+hex = "0.4"
+hkdf = "0.12"
+sha2 = "0.10"
+zcash_transparent = "=0.11.0-pre.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
