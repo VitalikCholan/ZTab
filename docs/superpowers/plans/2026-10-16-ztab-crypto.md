@@ -722,6 +722,19 @@ fn rejects_a_ufvk_of_the_other_network() {
     assert_eq!(err.code, Code::Internal);
     assert!(err.message.starts_with("ufvk decode:"), "{}", err.message);
 }
+
+#[test]
+fn fixture_seed_is_the_hkdf_spend_key_of_the_ts_vectors() {
+    // Pins the `ztab/v1/*` port from the Rust side: the same vectors live in crypto/test/fixtures/hkdf.json.
+    let master: Vec<u8> = (0u8..32).collect();
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(b"0f6d3f4e-7c1b-4a8e-9a9b-2f3c4d5e6f70"), &master);
+    let mut spend_seed = [0u8; 32];
+    hk.expand(b"ztab/v1/spend", &mut spend_seed).unwrap();
+    assert_eq!(spend_seed.to_vec(), fixture_seed());
+    let mut admin = [0u8; 32];
+    hk.expand(b"ztab/v1/admin", &mut admin).unwrap();
+    assert_eq!(hex::encode(admin), "6520dc5f78da4a75a29312b191c11a032cd26818ce3a74631d798f2d65fdf0df");
+}
 ```
 
 Add to `[dev-dependencies]` in `crypto/rust/Cargo.toml`: `serde_json = "1"` (already a dependency; listing it again under dev-dependencies is not needed, skip if cargo warns).
@@ -796,7 +809,7 @@ In `crypto/rust/src/lib.rs` add `pub mod keys;` after `pub mod error;`.
 - [ ] **Step 5: Run the tests**
 
 Run: `cd crypto/rust && cargo test`
-Expected: all pass (network 2, keys 6).
+Expected: all pass (network 2, keys 7).
 
 - [ ] **Step 6: Commit**
 
