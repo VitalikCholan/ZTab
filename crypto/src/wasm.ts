@@ -1,5 +1,6 @@
 import init, * as wasm from '../pkg/ztab_crypto.js';
 import { CryptoError, fromWasmError } from './errors.ts';
+import type { Network, PcztSummary, SignExpectation, TabAccount } from './types.ts';
 
 export type WasmSource = BufferSource | WebAssembly.Module | URL | string;
 
@@ -38,4 +39,40 @@ function call<T>(f: () => T): T {
 
 export function wasmVersion(): string {
   return call(() => wasm.version());
+}
+
+export function deriveTabAccount(network: Network, spendSeed: Uint8Array): TabAccount {
+  const account = call(() => wasm.deriveTabAccount(network, spendSeed));
+  try {
+    return { ufvk: account.ufvk, orchardSk: account.orchardSk };
+  } finally {
+    account.free();
+  }
+}
+
+export function deriveAddress(network: Network, ufvk: string, index: number): string {
+  return call(() => wasm.deriveAddress(network, ufvk, index));
+}
+
+export function validateRecipient(network: Network, address: string): void {
+  call(() => wasm.validateRecipient(network, address));
+}
+
+export function inspectPczt(network: Network, pczt: Uint8Array): PcztSummary {
+  return JSON.parse(call(() => wasm.inspectPczt(network, pczt))) as PcztSummary;
+}
+
+/**
+ * Signs the watcher's proved PCZT. Refuses (pczt_mismatch) before signing unless every
+ * value-carrying output pays `expected.recipient` and the sums match. `rngSeed` must be 32
+ * fresh bytes from `crypto.getRandomValues` for every call.
+ */
+export function signPczt(
+  network: Network,
+  pczt: Uint8Array,
+  orchardSk: Uint8Array,
+  rngSeed: Uint8Array,
+  expected: SignExpectation,
+): Uint8Array {
+  return call(() => wasm.signPczt(network, pczt, orchardSk, rngSeed, JSON.stringify(expected)));
 }
