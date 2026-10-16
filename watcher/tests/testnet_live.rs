@@ -1046,7 +1046,28 @@ async fn full_tab_lifecycle_on_testnet() {
         PAYMENT_ZAT
     );
     let sweep_txid = s["txid"].as_str().unwrap().to_string();
-    let signed_b64 = common::sign_like_browser(offer["pczt_b64"].as_str().unwrap(), &usk);
+    if let Ok(dir) = std::env::var("ZTAB_TEST_DUMP_DIR") {
+        common::dump_sweep_fixture(
+            std::path::Path::new(&dir),
+            &tab_seed,
+            &ufvk,
+            &addresses,
+            offer["pczt_b64"].as_str().unwrap(),
+            payer.address(),
+            s,
+        );
+        eprintln!("sweep fixture dumped to {dir}");
+    }
+    let signed_b64 = common::sign_for_test(&common::SignRequest {
+        network: &network,
+        spend_seed: &tab_seed,
+        usk: &usk,
+        ufvk: &ufvk,
+        pczt_b64: offer["pczt_b64"].as_str().unwrap(),
+        recipient: payer.address(),
+        total_zat: s["output_zat"].as_u64().unwrap(),
+        fee_zat: s["fee_zat"].as_u64().unwrap(),
+    });
     let bc = common::post(
         &addr,
         &format!("/v1/tabs/{tab_id}/broadcast"),

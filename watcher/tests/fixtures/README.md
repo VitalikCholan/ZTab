@@ -65,3 +65,20 @@ The test fails early with "the fixture payer needs >= 0.021 TAZ; refill it" when
 balance runs low. To refill, claim again for the same address (step 3). The birthday does
 not change, because the wallet scans every block from its birthday on. If you want a fresh
 payer instead, repeat every step with a new seed and birthday.
+
+## Signing through the browser module
+
+`full_tab_lifecycle_on_testnet` signs the closing PCZT in-process by default. Set
+`ZTAB_TEST_SIGNER_CMD` to sign through `@ztab/crypto` instead (the command runs with
+`sh -c` from `watcher/`; it gets one JSON request on stdin and must print
+`{"ufvk","txid","signedPcztB64"}`):
+
+```sh
+export ZTAB_TEST_SIGNER_CMD="$HOME/.nvm/versions/node/v24.18.0/bin/node ../crypto/scripts/sign-stdin.ts"
+```
+
+The test also asserts that the module derives the same UFVK from the tab seed.
+
+Set `ZTAB_TEST_DUMP_DIR` to a directory to receive `spend_seed.hex`, `sweep.proved.pczt` and
+`expected.json` for that run's tab: a public fixture for `crypto/rust/tests/fixtures/tab/`
+(the tab is a throwaway whose funds the test sweeps back to the payer).
