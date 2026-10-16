@@ -3,6 +3,7 @@
 pub mod error;
 pub mod keys;
 pub mod network;
+pub mod pczt_ops;
 pub mod recipient;
 
 use wasm_bindgen::prelude::*;
