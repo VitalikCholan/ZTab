@@ -560,27 +560,66 @@ pub struct SignRequest<'a> {
 /// request on stdin and writes `{"ufvk","txid","signedPcztB64"}` on stdout, and the UFVK it
 /// derived must equal the one this test registered. Without the variable, signs in-process.
 pub fn sign_for_test(req: &SignRequest<'_>) -> String {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-    use zcash_protocol::consensus::Network;
     let Ok(cmd) = std::env::var("ZTAB_TEST_SIGNER_CMD") else {
         return sign_like_browser(req.pczt_b64, req.usk);
     };
-    let network = match req.network {
-        Network::TestNetwork => "test",
-        Network::MainNetwork => "main",
-    };
     let input = serde_json::json!({
-        "network": network,
+        "op": "sign",
+        "network": network_name(req.network),
         "spendSeedHex": hex::encode(req.spend_seed),
         "pcztB64": req.pczt_b64,
         "recipient": req.recipient,
         "totalZat": req.total_zat,
         "feeZat": req.fee_zat,
     });
+    let reply = run_signer_cmd(&cmd, &input);
+    assert_eq!(
+        reply["ufvk"].as_str().unwrap(),
+        req.ufvk,
+        "the browser module derived a different UFVK from the same seed"
+    );
+    reply["signedPcztB64"].as_str().unwrap().to_string()
+}
+
+/// What the browser module derives from a tab seed: its UFVK and the addresses at indices
+/// `0..participants`. `None` when `ZTAB_TEST_SIGNER_CMD` is unset (the in-process path).
+pub fn derive_for_test(
+    network: &zcash_protocol::consensus::Network,
+    spend_seed: &[u8; 32],
+    participants: u32,
+) -> Option<(String, Vec<String>)> {
+    let cmd = std::env::var("ZTAB_TEST_SIGNER_CMD").ok()?;
+    let input = serde_json::json!({
+        "op": "derive",
+        "network": network_name(network),
+        "spendSeedHex": hex::encode(spend_seed),
+        "participantsCount": participants,
+    });
+    let reply = run_signer_cmd(&cmd, &input);
+    let addresses = reply["addresses"]
+        .as_array()
+        .expect("addresses array")
+        .iter()
+        .map(|a| a.as_str().unwrap().to_string())
+        .collect();
+    Some((reply["ufvk"].as_str().unwrap().to_string(), addresses))
+}
+
+fn network_name(network: &zcash_protocol::consensus::Network) -> &'static str {
+    use zcash_protocol::consensus::Network;
+    match network {
+        Network::TestNetwork => "test",
+        Network::MainNetwork => "main",
+    }
+}
+
+/// Runs `sh -c cmd`, sends `input` as JSON on stdin and parses the JSON reply on stdout.
+fn run_signer_cmd(cmd: &str, input: &serde_json::Value) -> serde_json::Value {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
     let mut child = Command::new("sh")
         .arg("-c")
-        .arg(&cmd)
+        .arg(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -594,13 +633,7 @@ pub fn sign_for_test(req: &SignRequest<'_>) -> String {
         .unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "external signer failed: {}", out.status);
-    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).expect("signer reply is JSON");
-    assert_eq!(
-        reply["ufvk"].as_str().unwrap(),
-        req.ufvk,
-        "the browser module derived a different UFVK from the same seed"
-    );
-    reply["signedPcztB64"].as_str().unwrap().to_string()
+    serde_json::from_slice(&out.stdout).expect("signer reply is JSON")
 }
 
 /// Writes a public fixture for `crypto/`: the throwaway tab's seed, its proved sweep PCZT and

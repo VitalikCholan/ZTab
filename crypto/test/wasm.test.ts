@@ -84,4 +84,21 @@ describe('pczt', () => {
     expect(codeOf(() => signPczt('test', sweep, foreignSk, seed, { ...ok, recipient: expected.addresses['0'] }))).toBe('pczt_mismatch');
     expect(codeOf(() => signPczt('test', sweep, foreignSk, seed, ok))).toBe('sign_failed');
   });
+
+  it('signs the real tab fixture end to end', () => {
+    const exp = JSON.parse(readFileSync(new URL('../rust/tests/fixtures/tab/expected.json', import.meta.url), 'utf8')) as {
+      ufvk: string; recipient: string; outputZat: number; feeZat: number; txid: string;
+    };
+    const seed = new Uint8Array(Buffer.from(readFileSync(new URL('../rust/tests/fixtures/tab/spend_seed.hex', import.meta.url), 'utf8').trim(), 'hex'));
+    const proved = new Uint8Array(readFileSync(new URL('../rust/tests/fixtures/tab/sweep.proved.pczt', import.meta.url)));
+    const account = deriveTabAccount('test', seed);
+    expect(account.ufvk).toBe(exp.ufvk);
+    const summary = inspectPczt('test', proved);
+    expect(summary.txid).toBe(exp.txid);
+    const signed = signPczt('test', proved, account.orchardSk, crypto.getRandomValues(new Uint8Array(32)), {
+      recipient: exp.recipient, totalZat: exp.outputZat, feeZat: exp.feeZat,
+    });
+    expect(signed.length).toBeGreaterThan(proved.length);
+    expect(inspectPczt('test', signed)).toEqual(summary);
+  });
 });

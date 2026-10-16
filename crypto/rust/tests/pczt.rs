@@ -187,3 +187,48 @@ fn check_expectation_refuses_a_second_value_carrying_output() {
     };
     assert_eq!(check_expectation(&empty, &want, &expected_for_sweep()).unwrap_err().message, "the PCZT pays nobody");
 }
+
+mod real_tab {
+    use super::*;
+    use pczt::roles::verifier::Verifier;
+    use ztab_crypto::keys::derive_tab_account;
+
+    fn tab(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{}/tests/fixtures/tab/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    #[test]
+    fn signs_a_real_watcher_sweep_with_the_tab_key() {
+        let exp: serde_json::Value = serde_json::from_slice(&tab("expected.json")).unwrap();
+        let seed = hex::decode(String::from_utf8(tab("spend_seed.hex")).unwrap().trim()).unwrap();
+        let account = derive_tab_account(Network::TestNetwork, &seed).unwrap();
+        assert_eq!(account.ufvk, exp["ufvk"].as_str().unwrap());
+
+        let proved = tab("sweep.proved.pczt");
+        let summary = inspect(Network::TestNetwork, &proved).unwrap();
+        assert_eq!(summary.txid, exp["txid"].as_str().unwrap());
+        assert_eq!(summary.fee_zat, exp["feeZat"].as_u64().unwrap());
+        assert_eq!(summary.outputs.iter().map(|o| o.zat).sum::<u64>(), exp["outputZat"].as_u64().unwrap());
+
+        let expected = Expected {
+            recipient: exp["recipient"].as_str().unwrap().to_string(),
+            total_zat: exp["outputZat"].as_u64().unwrap(),
+            fee_zat: exp["feeZat"].as_u64().unwrap(),
+        };
+        let signed = sign(Network::TestNetwork, &proved, &account.orchard_sk[..], &[4u8; 32], &expected).unwrap();
+
+        // Every action now carries a spend authorization, and the transaction is unchanged.
+        let mut unsigned = 0;
+        Verifier::new(parse(&signed).unwrap())
+            .with_ironwood::<std::convert::Infallible, _>(|b| {
+                unsigned = b.actions().iter().filter(|a| a.spend().spend_auth_sig().is_none()).count();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(unsigned, 0);
+        assert_eq!(inspect(Network::TestNetwork, &signed).unwrap(), summary);
+        // Signatures are randomized: a different rng seed gives different bytes, same effects.
+        let again = sign(Network::TestNetwork, &proved, &account.orchard_sk[..], &[5u8; 32], &expected).unwrap();
+        assert_ne!(again, signed);
+    }
+}

@@ -38,4 +38,21 @@ describe('scripts/sign-stdin.ts', () => {
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain('pczt_mismatch');
   });
+
+  it('derives the UFVK and addresses 0 and 1 for the fixture seed (op derive)', () => {
+    const expected = JSON.parse(
+      readFileSync(new URL('../rust/tests/fixtures/expected.json', import.meta.url), 'utf8'),
+    ) as { ufvk: string; addresses: Record<string, string> };
+    const r = run({
+      op: 'derive',
+      network: 'test',
+      spendSeedHex: readFileSync(new URL('../rust/tests/fixtures/spend_seed.hex', import.meta.url), 'utf8').trim(),
+      participantsCount: 2,
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      ufvk: expected.ufvk,
+      addresses: [expected.addresses['0'], expected.addresses['1']],
+    });
+  });
 });

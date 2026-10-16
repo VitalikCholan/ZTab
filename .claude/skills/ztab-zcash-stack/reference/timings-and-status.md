@@ -34,3 +34,4 @@
 | Sweep mined after broadcast | 21 s | – | 79 s |
 | Whole scenario | 302 s | 276 s | 329 s |
 Blocks ran 25–35 s apart; plan for "paid" at ~1.5 min and "sweepable" at ~3–4 min on testnet. A tab younger than ~10 blocks cannot build a sweep proposal yet (no anchor), so a `POST /sweep` right after registration is a 409 regardless of funds.
+Browser-module path (Node, wasm): identical sweep timings to the in-process signer; signing itself 62 ms (the whole real-tab Vitest case: derive, inspect twice, sign).

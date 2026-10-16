@@ -1,0 +1,13 @@
+{
+  "addresses": [
+    "utest1p5skm24na3d87vddry2r498c0tu20s7085jev0a0czpx74g58s65j9adcz9ygemkxh8vuf4vujx6dvrgkrypcmx3gc2zaactucrgp3wj",
+    "utest1hfje0fdz36n0cx6v7cqvftvtqa6ga304svkphrl3942a8hz7y7lu6ccfrfmactca85f4jmwh243vclah02cldfmxel7kfm903535k04h"
+  ],
+  "feeZat": 10000,
+  "network": "test",
+  "outputZat": 1990000,
+  "recipient": "utest1ar2v4yu756pkxhpacqe0kut2zkjske7y2pe6dea6ezfg7qs3c8e4e5uflja4e4l5869c5j0q6g5gvvl8620uxy9nr26475939uegwc4d",
+  "totalInZat": 2000000,
+  "txid": "747c4880d80f95bb18e001fb2866ae60cf5559f9fc83a411dc782ec52bda77f5",
+  "ufvk": "uviewtest1zjm6xyc2cug2qn6vrngyrd09dxyla5cxcrd553fa59p2u9m4cuelwz04zukfygkttatjkcrlydk79hcldhtnm8fwfsax2c68pw24r6f7v5c4j48zr3y8zdjrlkqaxx6sngwyyh6h3ldqu7redz5ullpxsk2w83wrmggy6tq86ql88rnlgt0p2usarv4tv"
+}
