@@ -22,8 +22,10 @@ pub extern "C" fn probe_parse(ptr: *const u8, len: usize) -> i32 {
     }
 }
 
-/// Sign every Ironwood spend that carries a ZIP 32 derivation with the given
-/// Orchard spending key (32 bytes), using a caller-seeded RNG (32 bytes).
+/// Sign every Ironwood spend the given Orchard spending key (32 bytes) can
+/// authorize, using a caller-seeded RNG (32 bytes). PCZTs from view-only
+/// accounts carry no ZIP 32 derivation, so we try every action and skip the
+/// ones that answer `WrongSpendAuthorizingKey` (dummy spends, other keys).
 /// Writes the serialized signed PCZT to a fresh buffer; returns its pointer and
 /// stores the length in `out_len`. Returns null on failure (error code in out_len).
 #[no_mangle]
@@ -43,17 +45,13 @@ pub extern "C" fn probe_sign(
     let seed: [u8; 32] = unsafe { core::slice::from_raw_parts(seed_ptr, 32) }.try_into().unwrap();
 
     let Ok(pczt) = pczt::Pczt::parse(bytes) else { return fail(1) };
-    let mut indices = Vec::new();
-    let pczt = match Verifier::new(pczt).with_ironwood::<Infallible, _>(|bundle| {
-        for (i, action) in bundle.actions().iter().enumerate() {
-            if action.spend().zip32_derivation().is_some() {
-                indices.push(i);
-            }
-        }
-        Ok(())
-    }) {
-        Ok(v) => v.finish(),
-        Err(_) => return fail(2),
+    let action_count = {
+        let mut n = 0usize;
+        let _ = Verifier::new(pczt.clone()).with_ironwood::<Infallible, _>(|bundle| {
+            n = bundle.actions().len();
+            Ok(())
+        });
+        n
     };
     let sk = match Option::<SpendingKey>::from(SpendingKey::from_bytes(sk_bytes)) {
         Some(sk) => sk,
@@ -62,10 +60,19 @@ pub extern "C" fn probe_sign(
     let ask = SpendAuthorizingKey::from(&sk);
     let mut rng = StdRng::from_seed(seed);
     let Ok(mut signer) = Signer::new(pczt) else { return fail(4) };
-    for i in indices {
-        if signer.sign_ironwood(&mut rng, i, &ask).is_err() {
-            return fail(100 + i);
+    let mut signed = 0usize;
+    for i in 0..action_count {
+        match signer.sign_ironwood(&mut rng, i, &ask) {
+            Ok(()) => signed += 1,
+            // Not our spend (dummy, or another key): skip. Anything else is a real failure.
+            Err(pczt::roles::signer::Error::IronwoodSign(
+                orchard::pczt::SignerError::WrongSpendAuthorizingKey,
+            )) => {}
+            Err(_) => return fail(100 + i),
         }
+    }
+    if signed == 0 {
+        return fail(6);
     }
     let Ok(out) = signer.finish().serialize() else { return fail(5) };
     let mut out = out.into_boxed_slice();
