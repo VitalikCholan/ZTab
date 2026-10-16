@@ -2,15 +2,19 @@
 /* eslint-disable */
 
 /**
- * Returned to JS as an object with `ufvk` and `orchardSk` getters and `free()`; the Rust
- * copy of the key is zeroed when freed.
+ * Returned to JS as an object with a `ufvk` getter, `takeOrchardSk()` and `free()`; the Rust
+ * copy of the key is moved out by `takeOrchardSk` and zeroed on drop.
  */
 export class TabAccount {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
-    orchardSk: Uint8Array;
-    ufvk: string;
+    /**
+     * Hands the 32-byte Orchard spending key to the caller, who must `fill(0)` it after use.
+     * The Rust copy is emptied; a second call returns an empty array.
+     */
+    takeOrchardSk(): Uint8Array;
+    readonly ufvk: string;
 }
 
 export function deriveAddress(network: string, ufvk: string, index: number): string;
@@ -35,15 +39,13 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_get_tabaccount_orchardSk: (a: number) => [number, number];
-    readonly __wbg_get_tabaccount_ufvk: (a: number) => [number, number];
-    readonly __wbg_set_tabaccount_orchardSk: (a: number, b: number, c: number) => void;
-    readonly __wbg_set_tabaccount_ufvk: (a: number, b: number, c: number) => void;
     readonly __wbg_tabaccount_free: (a: number, b: number) => void;
     readonly deriveAddress: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly deriveTabAccount: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly inspectPczt: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly signPczt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly tabaccount_takeOrchardSk: (a: number) => [number, number];
+    readonly tabaccount_ufvk: (a: number) => [number, number];
     readonly validateRecipient: (a: number, b: number, c: number, d: number) => [number, number];
     readonly version: () => [number, number];
     readonly rustsecp256k1_v0_14_context_create: (a: number) => number;

@@ -17,6 +17,12 @@ async function codeOf(p: Promise<unknown>): Promise<string> {
 }
 
 describe('blobs', () => {
+  it('refuses a value JSON cannot serialize', async () => {
+    for (const v of [undefined, () => 1, Symbol('x')]) {
+      await expect(sealBlob(keyA, v)).rejects.toMatchObject({ code: 'internal', message: 'value is not JSON-serializable' });
+    }
+  });
+
   it('round-trips JSON with a version byte and a fresh nonce', async () => {
     const one = await sealBlob(keyA, tab);
     const two = await sealBlob(keyA, tab);

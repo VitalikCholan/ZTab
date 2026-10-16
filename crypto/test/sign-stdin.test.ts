@@ -12,7 +12,7 @@ function run(request: object) {
 }
 
 describe('scripts/sign-stdin.ts', () => {
-  it('derives the UFVK, then fails with sign_failed for a seed that owns nothing in the PCZT', () => {
+  it('derives the UFVK, then is refused with pczt_mismatch for a seed whose key the PCZT outputs are not encrypted to', () => {
     const r = run({
       network: 'test',
       spendSeedHex: readFileSync(new URL('../rust/tests/fixtures/spend_seed.hex', import.meta.url), 'utf8').trim(),
@@ -22,7 +22,7 @@ describe('scripts/sign-stdin.ts', () => {
       feeZat: 10_000,
     });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain('sign_failed');
+    expect(r.stderr).toContain('pczt_mismatch');
     expect(r.stdout).toBe('');
   });
 

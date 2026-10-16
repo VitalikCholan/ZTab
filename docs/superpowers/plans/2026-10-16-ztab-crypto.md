@@ -16,6 +16,7 @@
 3. `validateRecipient` requires an **Orchard** receiver, a subset of the watcher rule (which also accepts Sapling-only UAs): the module verifies the closing payment through Ironwood outputs, so a recipient without an Orchard receiver could never pass `signPczt`.
 4. The positive signing fixture (a real proved PCZT plus the spend seed that signs it) comes from one run of the watcher's live test with a dump option (Task 10/11). The tab is a throwaway whose funds were swept, so its seed can be public.
 5. The CI job that rebuilds `pkg/` and compares it (spec §7) is not in this plan: the repository has no CI yet; it belongs to the infra subproject together with the watcher's CI.
+6. The spec §7 step 'signed PCZT run through `tx-extractor`' is not implemented: extraction needs the Orchard circuit verifying keys; the real-tab tests check that every action carries a spend authorization and that the effects are unchanged, and the testnet run (sweep mined) is the proof.
 
 ## Global Constraints
 

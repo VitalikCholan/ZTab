@@ -1,8 +1,8 @@
 /* @ts-self-types="./ztab_crypto.d.ts" */
 
 /**
- * Returned to JS as an object with `ufvk` and `orchardSk` getters and `free()`; the Rust
- * copy of the key is zeroed when freed.
+ * Returned to JS as an object with a `ufvk` getter, `takeOrchardSk()` and `free()`; the Rust
+ * copy of the key is moved out by `takeOrchardSk` and zeroed on drop.
  */
 export class TabAccount {
     static __wrap(ptr) {
@@ -22,10 +22,12 @@ export class TabAccount {
         wasm.__wbg_tabaccount_free(ptr, 0);
     }
     /**
+     * Hands the 32-byte Orchard spending key to the caller, who must `fill(0)` it after use.
+     * The Rust copy is emptied; a second call returns an empty array.
      * @returns {Uint8Array}
      */
-    get orchardSk() {
-        const ret = wasm.__wbg_get_tabaccount_orchardSk(this.__wbg_ptr);
+    takeOrchardSk() {
+        const ret = wasm.tabaccount_takeOrchardSk(this.__wbg_ptr);
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;
@@ -37,29 +39,13 @@ export class TabAccount {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.__wbg_get_tabaccount_ufvk(this.__wbg_ptr);
+            const ret = wasm.tabaccount_ufvk(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
-    }
-    /**
-     * @param {Uint8Array} arg0
-     */
-    set orchardSk(arg0) {
-        const ptr0 = passArray8ToWasm0(arg0, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.__wbg_set_tabaccount_orchardSk(this.__wbg_ptr, ptr0, len0);
-    }
-    /**
-     * @param {string} arg0
-     */
-    set ufvk(arg0) {
-        const ptr0 = passStringToWasm0(arg0, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.__wbg_set_tabaccount_ufvk(this.__wbg_ptr, ptr0, len0);
     }
 }
 if (Symbol.dispose) TabAccount.prototype[Symbol.dispose] = TabAccount.prototype.free;

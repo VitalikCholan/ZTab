@@ -1,6 +1,6 @@
 //! What the browser does with the watcher's closing PCZT: read what it pays (the confirmation
 //! screen) and sign it, but only when it pays exactly what Alice confirmed.
-use orchard::keys::{SpendAuthorizingKey, SpendingKey};
+use orchard::keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey};
 use pczt::roles::signer::{Error as SignerError, Signer};
 use pczt::roles::verifier::{OrchardError, Verifier};
 use pczt::Pczt;
@@ -175,6 +175,48 @@ pub fn check_expectation(inspected: &Inspected, want: &[u8; 43], expected: &Expe
     Ok(())
 }
 
+/// Refuses unless every value-carrying output is encrypted so that the tab's own outgoing
+/// viewing key recovers a note paying `want` with the stated value. `cmx` and `cv_net` bind
+/// value and receiver, but not the ciphertexts: without this check a compromised watcher could
+/// ship an output that commits to the recipient with randomized `enc_ciphertext` or
+/// `out_ciphertext`, and the signed payment would be mined yet undecryptable by the
+/// recipient's wallet. Zero-valued outputs (padding dummies) are skipped.
+pub fn verify_outputs_recoverable(pczt: &Pczt, fvk: &FullViewingKey, want: &[u8; 43]) -> Result<(), CryptoError> {
+    let ovk = fvk.to_ovk(Scope::External);
+    Verifier::new(pczt.clone())
+        .with_ironwood::<CryptoError, _>(|bundle| {
+            let version = *bundle.bundle_version();
+            for (i, action) in bundle.actions().iter().enumerate() {
+                let out = action
+                    .output()
+                    .value()
+                    .as_ref()
+                    .ok_or_else(|| OrchardError::Custom(invalid(format!("action {i}: output value redacted"))))?
+                    .inner();
+                if out == 0 {
+                    continue;
+                }
+                let ok = matches!(
+                    action.recover_output_with_ovk(&ovk, version),
+                    Ok(Some((note, addr, _)))
+                        if addr.to_raw_address_bytes() == *want && note.value().inner() == out
+                );
+                if !ok {
+                    return Err(OrchardError::Custom(CryptoError::new(
+                        Code::PcztMismatch,
+                        format!("action {i}: the output is not encrypted to the expected recipient"),
+                    )));
+                }
+            }
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|e| match e {
+            OrchardError::Custom(e) => e,
+            other => invalid(format!("ironwood bundle: {other:?}")),
+        })
+}
+
 /// Signs every Ironwood spend `orchard_sk` authorizes, after `check_expectation` passes.
 /// `rng_seed` is 32 bytes from `crypto.getRandomValues` (RedPallas signatures are randomized).
 ///
@@ -195,9 +237,11 @@ pub fn sign(
             .try_into()
             .map_err(|_| CryptoError::internal("orchard spending key must be 32 bytes"))?,
     );
-    let seed: [u8; 32] = rng_seed
-        .try_into()
-        .map_err(|_| CryptoError::internal("rng seed must be 32 bytes"))?;
+    let seed: Zeroizing<[u8; 32]> = Zeroizing::new(
+        rng_seed
+            .try_into()
+            .map_err(|_| CryptoError::internal("rng seed must be 32 bytes"))?,
+    );
 
     let pczt = parse(bytes)?;
     let inspected = inspect_inner(network, &pczt)?;
@@ -205,8 +249,9 @@ pub fn sign(
 
     let sk = Option::<SpendingKey>::from(SpendingKey::from_bytes(*sk_bytes))
         .ok_or_else(|| CryptoError::internal("orchard spending key is not valid"))?;
+    verify_outputs_recoverable(&pczt, &FullViewingKey::from(&sk), &want)?;
     let ask = SpendAuthorizingKey::from(&sk);
-    let mut rng = StdRng::from_seed(seed);
+    let mut rng = StdRng::from_seed(*seed);
     let mut signer = Signer::new(pczt)
         .map_err(|e| CryptoError::new(Code::InvalidPczt, format!("signer: {e:?}")))?;
     let mut signed = 0usize;

@@ -108,10 +108,10 @@ fn sign_sweep(expected: &Expected) -> Result<Vec<u8>, ztab_crypto::error::Crypto
 }
 
 #[test]
-fn a_key_that_authorizes_no_spend_fails_after_the_checks_pass() {
+fn a_foreign_key_is_refused_before_any_signature() {
     let err = sign_sweep(&expected_for_sweep()).unwrap_err();
-    assert_eq!(err.code, Code::SignFailed);
-    assert_eq!(err.message, "this key authorizes none of the spends");
+    assert_eq!(err.code, Code::PcztMismatch);
+    assert!(err.message.contains("not encrypted to the expected recipient"), "{}", err.message);
 }
 
 #[test]
@@ -203,6 +203,16 @@ mod real_tab {
         let seed = hex::decode(String::from_utf8(tab("spend_seed.hex")).unwrap().trim()).unwrap();
         let account = derive_tab_account(Network::TestNetwork, &seed).unwrap();
         assert_eq!(account.ufvk, exp["ufvk"].as_str().unwrap());
+        // The watcher's own participant addresses from the live run, derived offline.
+        let addresses = exp["addresses"].as_array().expect("addresses array");
+        assert!(!addresses.is_empty());
+        for (i, a) in addresses.iter().enumerate() {
+            assert_eq!(
+                ztab_crypto::keys::derive_address(Network::TestNetwork, &account.ufvk, i as u32).unwrap(),
+                a.as_str().unwrap(),
+                "address {i}"
+            );
+        }
 
         let proved = tab("sweep.proved.pczt");
         let summary = inspect(Network::TestNetwork, &proved).unwrap();

@@ -22,9 +22,13 @@ const addresses = [0, 1, 2].map((i) => deriveAddress('test', ufvk, i));
 const adminBlob = await sealBlob(keys.admin, { title: 'Dinner', addresses /* … */ });
 ```
 
-Closing: `inspectPczt` builds the confirmation screen from the PCZT itself, after binding every output's value and recipient to its note commitment; `signPczt` re-checks recipient, total and fee against what Alice confirmed and refuses before signing on any difference. See `scripts/sign-stdin.ts` for the full sequence.
+Closing: `inspectPczt` builds the confirmation screen from the PCZT itself, after binding every output's value and recipient to its note commitment; `signPczt` re-checks recipient, total and fee against what Alice confirmed, and that every payment output is encrypted so the recipient's wallet can decrypt it, and refuses before signing on any difference. See `scripts/sign-stdin.ts` for the full sequence.
 
 Errors are `CryptoError { code, message }` with codes `invalid_fragment`, `decrypt_failed`, `invalid_recipient`, `invalid_pczt`, `pczt_mismatch`, `sign_failed`, `wasm_unavailable`; `internal` means a bug in the caller or here.
+
+## Consuming from the PWA
+
+The package exports TypeScript source with `.ts` import specifiers and `Uint8Array<ArrayBuffer>` types, so the consumer needs TypeScript >= 5.7 and a bundler that transpiles workspace TypeScript (Vite does). `loadWasm()` with no argument resolves `ztab_crypto_bg.wasm` relative to the glue through `new URL(..., import.meta.url)` and has been exercised only in Node so far: make "`loadWasm()` under Vite dev and build" the PWA's first smoke test, and do not pre-bundle `@ztab/crypto` through `optimizeDeps.include`.
 
 ## Build and test
 

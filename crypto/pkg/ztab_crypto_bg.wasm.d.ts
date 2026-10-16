@@ -1,15 +1,13 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
-export const __wbg_get_tabaccount_orchardSk: (a: number) => [number, number];
-export const __wbg_get_tabaccount_ufvk: (a: number) => [number, number];
-export const __wbg_set_tabaccount_orchardSk: (a: number, b: number, c: number) => void;
-export const __wbg_set_tabaccount_ufvk: (a: number, b: number, c: number) => void;
 export const __wbg_tabaccount_free: (a: number, b: number) => void;
 export const deriveAddress: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const deriveTabAccount: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const inspectPczt: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const signPczt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const tabaccount_takeOrchardSk: (a: number) => [number, number];
+export const tabaccount_ufvk: (a: number) => [number, number];
 export const validateRecipient: (a: number, b: number, c: number, d: number) => [number, number];
 export const version: () => [number, number];
 export const rustsecp256k1_v0_14_context_create: (a: number) => number;

@@ -8,6 +8,11 @@ export type Fragment =
   | { kind: 'participant'; index: number; key: Uint8Array };
 
 export function encodeFragment(fragment: Fragment): string {
+  const key = fragment.kind === 'admin' ? fragment.master : fragment.key;
+  if (key.length !== 32) throw new CryptoError('internal', 'a ZTab key is 32 bytes');
+  if (fragment.kind === 'participant' && !(Number.isInteger(fragment.index) && fragment.index >= 0 && fragment.index <= 0xffff_ffff)) {
+    throw new CryptoError('internal', 'participant index must be an integer in 0..=4294967295');
+  }
   switch (fragment.kind) {
     case 'admin':
       return `#a=${toBase64Url(fragment.master)}`;

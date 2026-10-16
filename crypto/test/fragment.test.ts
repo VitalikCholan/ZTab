@@ -39,6 +39,15 @@ describe('fragments', () => {
     expect(parseFragment(encodeFragment({ kind: 'participant', index: 7, key: bytes }))).toEqual({ kind: 'participant', index: 7, key: bytes });
   });
 
+  it('refuses to encode a bad key length or participant index as internal', () => {
+    expect(codeOf(() => encodeFragment({ kind: 'admin', master: bytes.slice(0, 31) }))).toBe('internal');
+    expect(codeOf(() => encodeFragment({ kind: 'group', key: new Uint8Array(33) }))).toBe('internal');
+    for (const index of [-1, 1.5, 0x1_0000_0000, NaN]) {
+      expect(codeOf(() => encodeFragment({ kind: 'participant', index, key: bytes }))).toBe('internal');
+    }
+    expect(encodeFragment({ kind: 'participant', index: 0xffff_ffff, key: bytes }).startsWith('#p=4294967295.')).toBe(true);
+  });
+
   it('rejects malformed fragments as invalid_fragment', () => {
     const b64 = toBase64Url(bytes);
     for (const bad of ['', '#', '#x=' + b64, '#a=' + b64 + '=', '#a=' + b64.slice(0, 40), '#a=ab+c' + b64.slice(4), '#p=' + b64, '#p=07.' + b64, '#p=-1.' + b64, '#p=4294967296.' + b64, '#p=1.' + b64.slice(0, 10)]) {

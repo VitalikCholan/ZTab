@@ -44,7 +44,7 @@ export function wasmVersion(): string {
 export function deriveTabAccount(network: Network, spendSeed: Uint8Array): TabAccount {
   const account = call(() => wasm.deriveTabAccount(network, spendSeed));
   try {
-    return { ufvk: account.ufvk, orchardSk: account.orchardSk };
+    return { ufvk: account.ufvk, orchardSk: account.takeOrchardSk() };
   } finally {
     account.free();
   }
@@ -63,9 +63,12 @@ export function inspectPczt(network: Network, pczt: Uint8Array): PcztSummary {
 }
 
 /**
- * Signs the watcher's proved PCZT. Refuses (pczt_mismatch) before signing unless every
- * value-carrying output pays `expected.recipient` and the sums match. `rngSeed` must be 32
- * fresh bytes from `crypto.getRandomValues` for every call.
+ * Signs the watcher's complete PCZT. Refuses (pczt_mismatch) before signing unless every
+ * value-carrying output pays `expected.recipient`, is encrypted so that recipient's wallet can
+ * decrypt it, and the sums match. `rngSeed` must be 32 fresh bytes from
+ * `crypto.getRandomValues` for every call. `rngSeed` is key-equivalent (with it and a
+ * signature the signing key is recoverable): generate it fresh and `fill(0)` it after the
+ * call, like `orchardSk`.
  */
 export function signPczt(
   network: Network,

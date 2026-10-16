@@ -11,7 +11,9 @@ const decoder = new TextDecoder();
 
 export async function sealBlob(key: BlobKey, value: unknown): Promise<Uint8Array<ArrayBuffer>> {
   const nonce = randomBytes(NONCE);
-  const plaintext = encoder.encode(JSON.stringify(value));
+  const json: string | undefined = JSON.stringify(value);
+  if (json === undefined) throw new CryptoError('internal', 'value is not JSON-serializable');
+  const plaintext = encoder.encode(json);
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key.key, plaintext),
   );
