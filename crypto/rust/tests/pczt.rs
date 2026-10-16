@@ -60,3 +60,27 @@ fn garbage_and_truncated_bytes_are_invalid_pczt_not_panics() {
         assert_eq!(err.code, Code::InvalidPczt, "{} bytes", bytes.len());
     }
 }
+
+const OTHER: &str = "utest1k76fvkzrq5a6sxurhd5muxlkeynlhvqcuzfrvnlex7vvgpk96m63rrxjunzxa2zqd799edqdup0u9zjz3pwkegwfty0x6qz3dcum28e7";
+
+#[test]
+fn metadata_that_contradicts_the_note_commitment_is_refused() {
+    use ztab_crypto::recipient::orchard_receiver;
+    let bytes = watcher_fixture("sweep.proved.pczt");
+    let real = orchard_receiver(Network::TestNetwork, RECIPIENT).unwrap().to_raw_address_bytes();
+    let other = orchard_receiver(Network::TestNetwork, OTHER).unwrap().to_raw_address_bytes();
+    let pos = bytes.windows(43).position(|w| w == real).expect("receiver bytes in fixture");
+    let mut tampered = bytes.clone();
+    tampered[pos..pos + 43].copy_from_slice(&other);
+    assert!(inspect(Network::TestNetwork, &bytes).is_ok());
+    let err = inspect(Network::TestNetwork, &tampered).unwrap_err();
+    assert_eq!(err.code, Code::InvalidPczt);
+    assert!(err.message.contains("note commitment"), "{}", err.message);
+}
+
+#[test]
+fn every_fixture_action_passes_commitment_checks() {
+    for name in ["sweep.proved.pczt", "sweep.signed.pczt", "sweep2.proved.pczt"] {
+        assert!(inspect(Network::TestNetwork, &watcher_fixture(name)).is_ok(), "{name}");
+    }
+}

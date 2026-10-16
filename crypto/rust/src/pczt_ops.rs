@@ -51,6 +51,8 @@ fn invalid(message: impl Into<String>) -> CryptoError {
     CryptoError::new(Code::InvalidPczt, message)
 }
 
+/// Values and recipients are read from PCZT metadata, so they are trusted only after each
+/// action's `cv_net` and note commitment (`cmx`) have been verified against that metadata.
 pub fn inspect_inner(network: Network, pczt: &Pczt) -> Result<Inspected, CryptoError> {
     let mut outputs = Vec::new();
     let mut receivers = Vec::new();
@@ -65,6 +67,12 @@ pub fn inspect_inner(network: Network, pczt: &Pczt) -> Result<Inspected, CryptoE
             value_sum = i64::try_from(*bundle.value_sum())
                 .map_err(|_| OrchardError::Custom(invalid("value sum out of range")))?;
             for (i, action) in bundle.actions().iter().enumerate() {
+                action.verify_cv_net().map_err(|e| {
+                    OrchardError::Custom(invalid(format!("action {i}: value commitment does not match: {e:?}")))
+                })?;
+                action.output().verify_note_commitment(action.spend()).map_err(|e| {
+                    OrchardError::Custom(invalid(format!("action {i}: note commitment does not match: {e:?}")))
+                })?;
                 let spent = action
                     .spend()
                     .value()
