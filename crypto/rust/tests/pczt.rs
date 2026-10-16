@@ -84,3 +84,106 @@ fn every_fixture_action_passes_commitment_checks() {
         assert!(inspect(Network::TestNetwork, &watcher_fixture(name)).is_ok(), "{name}");
     }
 }
+
+use ztab_crypto::pczt_ops::{check_expectation, parse, inspect_inner, sign, Expected, Inspected, PcztSummary};
+use ztab_crypto::recipient::orchard_receiver;
+
+/// Orchard spending key of the deterministic fixture tab (NOT the key of the watcher fixture
+/// PCZTs, whose wallet is gone): it signs nothing in them.
+const FOREIGN_SK: &str = "5ad2324395117be2510b63d2672f7f187302b6a1b683b512f2446bd0df378368";
+const FOREIGN_ADDRESS: &str = "utest1k76fvkzrq5a6sxurhd5muxlkeynlhvqcuzfrvnlex7vvgpk96m63rrxjunzxa2zqd799edqdup0u9zjz3pwkegwfty0x6qz3dcum28e7";
+
+fn expected_for_sweep() -> Expected {
+    Expected { recipient: RECIPIENT.to_string(), total_zat: 29_990_000, fee_zat: 10_000 }
+}
+
+fn sign_sweep(expected: &Expected) -> Result<Vec<u8>, ztab_crypto::error::CryptoError> {
+    sign(
+        Network::TestNetwork,
+        &watcher_fixture("sweep.proved.pczt"),
+        &hex::decode(FOREIGN_SK).unwrap(),
+        &[9u8; 32],
+        expected,
+    )
+}
+
+#[test]
+fn a_key_that_authorizes_no_spend_fails_after_the_checks_pass() {
+    let err = sign_sweep(&expected_for_sweep()).unwrap_err();
+    assert_eq!(err.code, Code::SignFailed);
+    assert_eq!(err.message, "this key authorizes none of the spends");
+}
+
+#[test]
+fn refuses_before_signing_when_the_recipient_differs() {
+    let err = sign_sweep(&Expected { recipient: FOREIGN_ADDRESS.to_string(), ..expected_for_sweep() }).unwrap_err();
+    assert_eq!(err.code, Code::PcztMismatch);
+    assert_eq!(err.message, "an output pays an address other than the expected recipient");
+}
+
+#[test]
+fn refuses_before_signing_when_the_total_or_fee_differs() {
+    let err = sign_sweep(&Expected { total_zat: 29_990_001, ..expected_for_sweep() }).unwrap_err();
+    assert_eq!(err.code, Code::PcztMismatch);
+    assert_eq!(err.message, "outputs pay 29990000 zat, expected 29990001");
+    let err = sign_sweep(&Expected { fee_zat: 20_000, ..expected_for_sweep() }).unwrap_err();
+    assert_eq!(err.code, Code::PcztMismatch);
+    assert_eq!(err.message, "fee is 10000 zat, expected 20000");
+}
+
+#[test]
+fn a_mainnet_call_with_a_testnet_recipient_fails_as_invalid_recipient() {
+    let err = sign(
+        Network::MainNetwork,
+        &watcher_fixture("sweep.proved.pczt"),
+        &hex::decode(FOREIGN_SK).unwrap(),
+        &[9u8; 32],
+        &expected_for_sweep(),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, Code::InvalidRecipient);
+}
+
+#[test]
+fn wrong_key_or_seed_lengths_are_internal_errors() {
+    let pczt = watcher_fixture("sweep.proved.pczt");
+    let err = sign(Network::TestNetwork, &pczt, &[1u8; 31], &[9u8; 32], &expected_for_sweep()).unwrap_err();
+    assert_eq!(err.code, Code::Internal);
+    assert_eq!(err.message, "orchard spending key must be 32 bytes");
+    let err = sign(Network::TestNetwork, &pczt, &[1u8; 32], &[9u8; 16], &expected_for_sweep()).unwrap_err();
+    assert_eq!(err.code, Code::Internal);
+    assert_eq!(err.message, "rng seed must be 32 bytes");
+}
+
+#[test]
+fn check_expectation_refuses_a_second_value_carrying_output() {
+    // Synthetic: the sweep pays the recipient AND leaks change to someone else.
+    let pczt = parse(&watcher_fixture("sweep.proved.pczt")).unwrap();
+    let real = inspect_inner(Network::TestNetwork, &pczt).unwrap();
+    let want = orchard_receiver(Network::TestNetwork, RECIPIENT).unwrap().to_raw_address_bytes();
+    let other = orchard_receiver(Network::TestNetwork, FOREIGN_ADDRESS).unwrap().to_raw_address_bytes();
+    let leaky = Inspected {
+        summary: PcztSummary {
+            outputs: vec![
+                PcztOutput { address: RECIPIENT.to_string(), zat: 29_000_000 },
+                PcztOutput { address: FOREIGN_ADDRESS.to_string(), zat: 990_000 },
+            ],
+            fee_zat: 10_000,
+            total_in_zat: 30_000_000,
+            txid: real.summary.txid.clone(),
+        },
+        receivers: vec![want, other],
+        actions: 2,
+    };
+    let err = check_expectation(&leaky, &want, &expected_for_sweep()).unwrap_err();
+    assert_eq!(err.code, Code::PcztMismatch);
+    // The honest inspection passes the same check.
+    check_expectation(&real, &want, &expected_for_sweep()).unwrap();
+    // No value-carrying output at all is also a mismatch.
+    let empty = Inspected {
+        summary: PcztSummary { outputs: vec![], fee_zat: 10_000, total_in_zat: 10_000, txid: real.summary.txid },
+        receivers: vec![],
+        actions: 2,
+    };
+    assert_eq!(check_expectation(&empty, &want, &expected_for_sweep()).unwrap_err().message, "the PCZT pays nobody");
+}

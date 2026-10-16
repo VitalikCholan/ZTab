@@ -1,13 +1,17 @@
 //! What the browser does with the watcher's closing PCZT: read what it pays (the confirmation
 //! screen) and sign it, but only when it pays exactly what Alice confirmed.
+use orchard::keys::{SpendAuthorizingKey, SpendingKey};
+use pczt::roles::signer::{Error as SignerError, Signer};
 use pczt::roles::verifier::{OrchardError, Verifier};
 use pczt::Pczt;
+use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use zcash_primitives::transaction::txid::{to_txid, TxIdDigester};
 use zcash_protocol::consensus::Network;
+use zeroize::Zeroizing;
 
 use crate::error::{Code, CryptoError};
-use crate::recipient::encode_orchard;
+use crate::recipient::{encode_orchard, orchard_receiver};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -149,4 +153,75 @@ pub fn inspect_inner(network: Network, pczt: &Pczt) -> Result<Inspected, CryptoE
 /// The confirmation-screen view of a PCZT.
 pub fn inspect(network: Network, bytes: &[u8]) -> Result<PcztSummary, CryptoError> {
     Ok(inspect_inner(network, &parse(bytes)?)?.summary)
+}
+
+/// Refuses unless every value-carrying output pays `want`, the outputs sum to
+/// `expected.total_zat` and the fee is `expected.fee_zat`. Runs before any signature exists.
+pub fn check_expectation(inspected: &Inspected, want: &[u8; 43], expected: &Expected) -> Result<(), CryptoError> {
+    let mismatch = |m: String| CryptoError::new(Code::PcztMismatch, m);
+    if inspected.summary.outputs.is_empty() {
+        return Err(mismatch("the PCZT pays nobody".into()));
+    }
+    if inspected.receivers.iter().any(|r| r != want) {
+        return Err(mismatch("an output pays an address other than the expected recipient".into()));
+    }
+    let paid: u64 = inspected.summary.outputs.iter().map(|o| o.zat).sum();
+    if paid != expected.total_zat {
+        return Err(mismatch(format!("outputs pay {paid} zat, expected {}", expected.total_zat)));
+    }
+    if inspected.summary.fee_zat != expected.fee_zat {
+        return Err(mismatch(format!("fee is {} zat, expected {}", inspected.summary.fee_zat, expected.fee_zat)));
+    }
+    Ok(())
+}
+
+/// Signs every Ironwood spend `orchard_sk` authorizes, after `check_expectation` passes.
+/// `rng_seed` is 32 bytes from `crypto.getRandomValues` (RedPallas signatures are randomized).
+///
+/// PCZTs from the watcher come from a view-only account, so their spends carry no
+/// `zip32_derivation`: the only way to find this key's spends is to try each action and treat
+/// `WrongSpendAuthorizingKey` as "not ours" (the dummy spend the IO Finalizer already signed,
+/// or another key's note). Any other error is fatal; at least one signature is required.
+pub fn sign(
+    network: Network,
+    bytes: &[u8],
+    orchard_sk: &[u8],
+    rng_seed: &[u8],
+    expected: &Expected,
+) -> Result<Vec<u8>, CryptoError> {
+    let want = orchard_receiver(network, &expected.recipient)?.to_raw_address_bytes();
+    let sk_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
+        orchard_sk
+            .try_into()
+            .map_err(|_| CryptoError::internal("orchard spending key must be 32 bytes"))?,
+    );
+    let seed: [u8; 32] = rng_seed
+        .try_into()
+        .map_err(|_| CryptoError::internal("rng seed must be 32 bytes"))?;
+
+    let pczt = parse(bytes)?;
+    let inspected = inspect_inner(network, &pczt)?;
+    check_expectation(&inspected, &want, expected)?;
+
+    let sk = Option::<SpendingKey>::from(SpendingKey::from_bytes(*sk_bytes))
+        .ok_or_else(|| CryptoError::internal("orchard spending key is not valid"))?;
+    let ask = SpendAuthorizingKey::from(&sk);
+    let mut rng = StdRng::from_seed(seed);
+    let mut signer = Signer::new(pczt)
+        .map_err(|e| CryptoError::new(Code::InvalidPczt, format!("signer: {e:?}")))?;
+    let mut signed = 0usize;
+    for i in 0..inspected.actions {
+        match signer.sign_ironwood(&mut rng, i, &ask) {
+            Ok(()) => signed += 1,
+            Err(SignerError::IronwoodSign(orchard::pczt::SignerError::WrongSpendAuthorizingKey)) => {}
+            Err(e) => return Err(CryptoError::new(Code::SignFailed, format!("action {i}: {e:?}"))),
+        }
+    }
+    if signed == 0 {
+        return Err(CryptoError::new(Code::SignFailed, "this key authorizes none of the spends"));
+    }
+    signer
+        .finish()
+        .serialize()
+        .map_err(|e| CryptoError::internal(format!("serialize: {e:?}")))
 }
