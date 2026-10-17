@@ -1,5 +1,16 @@
-import { Body, Controller, Param, ParseUUIDPipe, Put, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Put,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
+import { TabAuthGuard, type TabAuthRequest } from '../auth/tab-auth.guard.js';
 import { CreateTabPipe } from './create-tab.pipe.js';
 import type { CreateTabInput } from './create-tab.schema.js';
 import { TabsService } from './tabs.service.js';
@@ -17,5 +28,11 @@ export class TabsController {
     const { status, body: out } = await this.tabs.create(id, body);
     res.status(status);
     return out;
+  }
+
+  @Get(':tab_id')
+  @UseGuards(TabAuthGuard)
+  read(@Req() req: TabAuthRequest) {
+    return this.tabs.read(req.tabAuth.tab, req.tabAuth.role);
   }
 }

@@ -1,0 +1,195 @@
+import { randomBytes, randomUUID } from 'node:crypto';
+import type { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { AppModule } from '../src/app.module.js';
+import { configureApp } from '../src/setup.js';
+import { PrismaService } from '../src/prisma/prisma.service.js';
+import { hashToken } from '../src/auth/token.js';
+import { StubWatcher } from './stub-watcher.js';
+import { truncateAll } from './setup-db.js';
+import { TEST_DATABASE_URL } from './test-env.js';
+
+const bearer = (t: Buffer) => `Bearer ${t.toString('base64url')}`;
+const facts = (n: number) => ({
+  confirmed_zat: n,
+  mempool_zat: 0,
+  best_confirmations: 3,
+  transparent_source: false,
+});
+
+describe('GET /tabs/:id', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+  const stub = new StubWatcher();
+
+  const admin = randomBytes(32);
+  const p0 = randomBytes(32);
+  const p1 = randomBytes(32);
+  const blobs = { admin: 'YWRtaW4=', p0: 'cDA=', p1: 'cDE=' };
+  let id: string;
+
+  beforeAll(async () => {
+    await stub.start();
+    process.env.DATABASE_URL = TEST_DATABASE_URL;
+    process.env.WATCHER_TOKEN = 'test-token';
+    process.env.WATCHER_URL = stub.url;
+    process.env.ZTAB_NETWORK = 'test';
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    app = moduleRef.createNestApplication({ bodyParser: false });
+    configureApp(app);
+    await app.init();
+    prisma = app.get(PrismaService);
+  });
+
+  beforeEach(async () => {
+    stub.reset();
+    stub.setAuthToken('test-token');
+    await truncateAll(prisma);
+    id = randomUUID();
+    await prisma.tab.create({
+      data: {
+        id,
+        mode: 'individual',
+        participantsCount: 2,
+        ufvk: 'uviewtest1secret',
+        birthday: 1,
+        network: 'test',
+        addresses: {
+          create: [
+            { index: 0, address: 'utest1a0' },
+            { index: 1, address: 'utest1a1' },
+          ],
+        },
+        blobs: {
+          create: [
+            { role: 'admin', index: null, ciphertext: Buffer.from('admin') },
+            { role: 'participant', index: 0, ciphertext: Buffer.from('p0') },
+            { role: 'participant', index: 1, ciphertext: Buffer.from('p1') },
+          ],
+        },
+        tokens: {
+          create: [
+            { role: 'admin', index: null, tokenHash: hashToken(admin) },
+            { role: 'participant', index: 0, tokenHash: hashToken(p0) },
+            { role: 'participant', index: 1, tokenHash: hashToken(p1) },
+          ],
+        },
+      },
+    });
+    stub.setTab(id, {
+      participants: [
+        { index: 0, address: 'utest1a0', payments: [], status_facts: facts(5) },
+        { index: 1, address: 'utest1a1', payments: [], status_facts: facts(7) },
+      ],
+    });
+  });
+
+  afterAll(async () => {
+    await truncateAll(prisma);
+    await app.close();
+    await stub.stop();
+  });
+
+  const get = (token: Buffer) =>
+    request(app.getHttpServer())
+      .get(`/tabs/${id}`)
+      .set('Authorization', bearer(token));
+  const row = () => prisma.tab.findUniqueOrThrow({ where: { id } });
+
+  it('admin sees everything, never the ufvk', async () => {
+    const res = await get(admin).expect(200);
+    expect(res.body).toMatchObject({
+      tab_id: id,
+      mode: 'individual',
+      participants_count: 2,
+      state: 'open',
+      stale: false,
+      role: 'admin',
+      blob: blobs.admin,
+      synced_height: 100,
+      tip_height: 100,
+    });
+    expect(res.body.participants).toHaveLength(2);
+    expect(res.body.participant_index).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('secret');
+  });
+
+  it('participant sees only its own slice and blob', async () => {
+    const res = await get(p1).expect(200);
+    expect(res.body.role).toBe('participant');
+    expect(res.body.participant_index).toBe(1);
+    expect(res.body.blob).toBe(blobs.p1);
+    expect(res.body.participants).toEqual([
+      { index: 1, address: 'utest1a1', payments: [], status_facts: facts(7) },
+    ]);
+  });
+
+  it('watcher down returns stale snapshot', async () => {
+    stub.failNext('getTab', 502);
+    const res = await get(admin).expect(200);
+    expect(res.body).toMatchObject({
+      stale: true,
+      state: 'open',
+      blob: blobs.admin,
+    });
+    expect(res.body.synced_height).toBeUndefined();
+    expect(res.body.participants.map((p: { address: string }) => p.address)).toEqual([
+      'utest1a0',
+      'utest1a1',
+    ]);
+    expect(res.body.participants[0].payments).toEqual([]);
+  });
+
+  it('watcher that lost the tab also yields a stale snapshot', async () => {
+    stub.failNext('getTab', 404, 'tab not found');
+    const res = await get(admin).expect(200);
+    expect(res.body.stale).toBe(true);
+  });
+
+  it('writes last_access_at at most once a minute', async () => {
+    await prisma.tab.update({
+      where: { id },
+      data: { lastAccessAt: new Date(Date.now() - 120_000) },
+    });
+    await get(admin).expect(200);
+    const first = (await row()).lastAccessAt;
+    expect(Date.now() - first.getTime()).toBeLessThan(10_000);
+    await get(admin).expect(200);
+    expect((await row()).lastAccessAt.getTime()).toBe(first.getTime());
+  });
+
+  it('revives a paused tab', async () => {
+    await prisma.tab.update({ where: { id }, data: { paused: true } });
+    const res = await get(admin).expect(200);
+    expect(stub.callsTo('setActive').map((c) => c.body)).toEqual([{ active: true }]);
+    expect((await row()).paused).toBe(false);
+    expect(res.body).toMatchObject({ stale: false, state: 'open' });
+  });
+
+  it('revival failure keeps tab paused', async () => {
+    await prisma.tab.update({ where: { id }, data: { paused: true } });
+    stub.failNext('setActive', 502);
+    const res = await get(admin).expect(200);
+    expect(res.body).toMatchObject({ stale: true, state: 'abandoned' });
+    expect((await row()).paused).toBe(true);
+    await get(admin).expect(200);
+    expect(stub.callsTo('setActive')).toHaveLength(2);
+    expect((await row()).paused).toBe(false);
+  });
+
+  it('records the watcher state and sets closed_at the first time', async () => {
+    stub.setTab(id, { state: 'closed' });
+    const res = await get(admin).expect(200);
+    expect(res.body.state).toBe('closed');
+    const first = await row();
+    expect(first.lastKnownState).toBe('closed');
+    expect(first.lastKnownAt).not.toBeNull();
+    expect(first.closedAt).not.toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    await get(admin).expect(200);
+    expect((await row()).closedAt!.getTime()).toBe(first.closedAt!.getTime());
+  });
+});
