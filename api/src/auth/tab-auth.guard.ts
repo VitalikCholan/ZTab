@@ -10,7 +10,7 @@ import { ApiError } from '../common/api-error.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { Tab } from '../generated/prisma/client.js';
 import { ROLES_KEY } from './role.decorator.js';
-import { hashToken, parseBearer, type TabRole } from './token.js';
+import { hashToken, parseBearer, roleFromToken, type TabRole } from './token.js';
 
 export interface TabAuth {
   tab: Tab;
@@ -51,6 +51,7 @@ export class TabAuthGuard implements CanActivate {
       where: { tabId, tokenHash: computed },
       include: { tab: true },
     });
+    // Defence in depth: the row was found by this very hash.
     if (
       !row ||
       !timingSafeEqual(Buffer.from(row.tokenHash), computed)
@@ -58,12 +59,8 @@ export class TabAuthGuard implements CanActivate {
       throw notFound();
     }
 
-    const role: TabRole =
-      row.role === 'admin'
-        ? { kind: 'admin' }
-        : row.role === 'group'
-          ? { kind: 'group' }
-          : { kind: 'participant', index: row.index ?? 0 };
+    const role = roleFromToken(row, row.tab.participantsCount);
+    if (!role) throw notFound();
 
     const required = this.reflector.getAllAndOverride<
       TabRole['kind'][] | undefined

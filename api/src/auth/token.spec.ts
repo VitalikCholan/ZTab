@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { hashToken, parseBearer } from './token.js';
+import { hashToken, parseBearer, roleFromToken } from './token.js';
 
 const raw = Buffer.alloc(32, 7);
 const b64u = raw.toString('base64url');
@@ -38,5 +38,24 @@ describe('hashToken', () => {
   it('is SHA-256 of the token bytes', () => {
     expect(hashToken(raw).equals(createHash('sha256').update(raw).digest())).toBe(true);
     expect(hashToken(raw)).toHaveLength(32);
+  });
+});
+
+describe('roleFromToken', () => {
+  it('maps admin and group', () => {
+    expect(roleFromToken({ role: 'admin', index: null }, 3)).toEqual({ kind: 'admin' });
+    expect(roleFromToken({ role: 'group', index: null }, 3)).toEqual({ kind: 'group' });
+  });
+
+  it('maps participants within range', () => {
+    expect(roleFromToken({ role: 'participant', index: 0 }, 3)).toEqual({ kind: 'participant', index: 0 });
+    expect(roleFromToken({ role: 'participant', index: 2 }, 3)).toEqual({ kind: 'participant', index: 2 });
+  });
+
+  it('fails closed', () => {
+    expect(roleFromToken({ role: 'participant', index: 3 }, 3)).toBeNull();
+    expect(roleFromToken({ role: 'participant', index: -1 }, 3)).toBeNull();
+    expect(roleFromToken({ role: 'participant', index: null }, 3)).toBeNull();
+    expect(roleFromToken({ role: 'root', index: null }, 3)).toBeNull();
   });
 });

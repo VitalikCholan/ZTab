@@ -58,7 +58,20 @@ export class ApiExceptionFilter implements ExceptionFilter {
       status = exception.getStatus();
       code = codeForStatus(status);
       message =
-        status >= 500 ? 'internal error' : httpMessage(exception, status);
+        status >= 500
+          ? 'internal error'
+          : exception.cause instanceof SyntaxError || isJsonParseMessage(exception)
+            ? 'invalid JSON'
+            : httpMessage(exception, status);
+    } else if (exception instanceof SyntaxError && clientStatus(exception)) {
+      status = 400;
+      code = 'validation';
+      message = 'invalid JSON';
+    } else if (clientStatus(exception)) {
+      // Library errors such as body-parser's PayloadTooLargeError.
+      status = clientStatus(exception)!;
+      code = codeForStatus(status);
+      message = status === 413 ? 'request body too large' : 'bad request';
     } else {
       status = 500;
       code = 'internal';
@@ -71,7 +84,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       this.logger.error(`${req.method} ${req.path} ${status} ${code} ${name}`);
     }
 
-    res.status(status).json({ error: { code, message, ...extra } });
+    res.status(status).json({ error: { ...extra, code, message } });
   }
 }
 
@@ -83,4 +96,17 @@ function httpMessage(e: HttpException, status: number): string {
   if (typeof r === 'string') return r;
   const m = (r as { message?: unknown }).message;
   return typeof m === 'string' ? m : e.message;
+}
+
+/** 4xx status carried by http-errors style objects, if any. */
+function clientStatus(e: unknown): number | null {
+  if (typeof e !== 'object' || e === null) return null;
+  const o = e as { status?: unknown; statusCode?: unknown };
+  const n = typeof o.status === 'number' ? o.status : o.statusCode;
+  return typeof n === 'number' && n >= 400 && n <= 499 ? n : null;
+}
+
+/** Nest wraps body-parser's JSON SyntaxError in a BadRequestException. */
+function isJsonParseMessage(e: HttpException): boolean {
+  return e.getStatus() === 400 && /JSON/.test(e.message);
 }

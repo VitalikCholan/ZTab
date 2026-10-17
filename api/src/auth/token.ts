@@ -28,3 +28,28 @@ export function parseBearer(header: string | undefined): Buffer | null {
 export function hashToken(token: Buffer): Buffer<ArrayBuffer> {
   return createHash('sha256').update(token).digest();
 }
+
+/**
+ * Maps a stored token row to a role. Fails closed: returns null for a
+ * participant without a valid index, or for any unknown role.
+ */
+export function roleFromToken(
+  row: { role: string; index: number | null },
+  participantsCount: number,
+): TabRole | null {
+  switch (row.role) {
+    case 'admin':
+      return { kind: 'admin' };
+    case 'group':
+      return { kind: 'group' };
+    case 'participant':
+      return row.index !== null &&
+        Number.isInteger(row.index) &&
+        row.index >= 0 &&
+        row.index < participantsCount
+        ? { kind: 'participant', index: row.index }
+        : null;
+    default:
+      return null;
+  }
+}

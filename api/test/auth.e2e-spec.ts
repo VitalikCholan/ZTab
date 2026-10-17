@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { Controller, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -34,6 +34,11 @@ class TestAuthController {
     return { ok: true };
   }
 
+  @Post('echo')
+  echo(@Body() body: unknown) {
+    return { ok: typeof body };
+  }
+
   @Get('boom')
   boom(): never {
     throw new Error('secret internal detail');
@@ -52,8 +57,9 @@ describe('tab auth', () => {
   const p0 = tok();
   const p1 = tok();
   const adminB = tok();
+  const groupA = tok();
 
-  async function seed(tabId: string, tokens: [Buffer, 'admin' | 'participant', number | null][]) {
+  async function seed(tabId: string, tokens: [Buffer, 'admin' | 'group' | 'participant', number | null][]) {
     await prisma.tab.create({
       data: {
         id: tabId,
@@ -89,7 +95,7 @@ describe('tab auth', () => {
 
   beforeEach(async () => {
     await truncateAll(prisma);
-    await seed(tabA, [[adminA, 'admin', null], [p0, 'participant', 0], [p1, 'participant', 1]]);
+    await seed(tabA, [[adminA, 'admin', null], [groupA, 'group', null], [p0, 'participant', 0], [p1, 'participant', 1]]);
     await seed(tabB, [[adminB, 'admin', null]]);
   });
 
@@ -118,6 +124,18 @@ describe('tab auth', () => {
     expect(res.body).toEqual({ role: { kind: 'admin' }, tab_id: tabA });
   });
 
+  it('resolves participant 0 with index 0', async () => {
+    const res = await get(`/test-auth/${tabA}/whoami`, bearer(p0)).expect(200);
+    expect(res.body.role).toEqual({ kind: 'participant', index: 0 });
+  });
+
+  it('resolves the group role and refuses it on admin-only routes', async () => {
+    const res = await get(`/test-auth/${tabA}/whoami`, bearer(groupA)).expect(200);
+    expect(res.body.role).toEqual({ kind: 'group' });
+    const denied = await get(`/test-auth/${tabA}/admin-only`, bearer(groupA)).expect(403);
+    expect(denied.body.error.code).toBe('forbidden');
+  });
+
   it('resolves participant 1 with its index', async () => {
     const res = await get(`/test-auth/${tabA}/whoami`, bearer(p1)).expect(200);
     expect(res.body.role).toEqual({ kind: 'participant', index: 1 });
@@ -133,7 +151,9 @@ describe('tab auth', () => {
   });
 
   it('unknown random token on a known tab is 404', async () => {
-    await get(`/test-auth/${tabA}/whoami`, bearer(tok())).expect(404);
+    const known = await get(`/test-auth/${tabA}/whoami`, bearer(tok())).expect(404);
+    const unknown = await get(`/test-auth/${randomUUID()}/whoami`, bearer(tok())).expect(404);
+    expect(known.text).toBe(unknown.text);
   });
 
   it('403 forbidden for a participant on an admin-only route', async () => {
@@ -153,8 +173,48 @@ describe('tab auth', () => {
     expect(res.text).not.toContain('secret internal detail');
   });
 
-  it('filter maps unknown routes and 413 to the error shape', async () => {
+  it('filter maps unknown routes to the error shape', async () => {
     const res = await get('/nope').expect(404);
     expect(res.body.error.code).toBe('not_found');
+  });
+
+  it('413 validation for a JSON body over 64 KB', async () => {
+    const res = await request(app.getHttpServer())
+      .post(`/test-auth/${tabA}/echo`)
+      .set('Authorization', bearer(adminA))
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify({ pad: 'x'.repeat(70 * 1024) }))
+      .expect(413);
+    expect(res.body).toEqual({
+      error: { code: 'validation', message: 'request body too large' },
+    });
+  });
+
+  it('400 validation with a fixed message for invalid JSON', async () => {
+    const res = await request(app.getHttpServer())
+      .post(`/test-auth/${tabA}/echo`)
+      .set('Authorization', bearer(adminA))
+      .set('Content-Type', 'application/json')
+      .send('{"a": nope')
+      .expect(400);
+    expect(res.body.error).toEqual({ code: 'validation', message: 'invalid JSON' });
+  });
+
+  it('the database rejects a participant row without an index', async () => {
+    await expect(
+      prisma.tabToken.create({
+        data: { tabId: tabA, role: 'participant', index: null, tokenHash: hashToken(tok()) },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.tabBlob.create({
+        data: { tabId: tabA, role: 'participant', index: null, ciphertext: Buffer.from([1]) },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.tabToken.create({
+        data: { tabId: tabA, role: 'admin', index: 0, tokenHash: hashToken(tok()) },
+      }),
+    ).rejects.toThrow();
   });
 });
