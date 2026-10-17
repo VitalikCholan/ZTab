@@ -865,7 +865,16 @@ async fn full_tab_lifecycle_on_testnet() {
         zip32::AccountId::ZERO,
     )
     .unwrap();
-    let ufvk = usk.to_unified_full_viewing_key().encode(&network).unwrap();
+    // With ZTAB_TEST_SIGNER_CMD set, the tab key is the one the browser module derives
+    // (Orchard-only), which is what production registers.
+    let mut module_addresses = None;
+    let ufvk = match common::derive_for_test(&network, &tab_seed, 2) {
+        Some((ufvk, addrs)) => {
+            module_addresses = Some(addrs);
+            ufvk
+        }
+        None => usk.to_unified_full_viewing_key().encode(&network).unwrap(),
+    };
     // The birthday sits 20 blocks below the tip. With a birthday at the tip, the wallet
     // has no note-commitment checkpoint 10 blocks below the tip until the tab is 10 blocks
     // old, and the sweep proposal fails with `ScanRequired` ("not synced yet") instead of
@@ -881,6 +890,12 @@ async fn full_tab_lifecycle_on_testnet() {
         .map(|a| a["address"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(addresses.len(), 2);
+    if let Some(module_addresses) = module_addresses {
+        assert_eq!(
+            addresses, module_addresses,
+            "watcher addresses differ from the browser module's (spec §5 step 5)"
+        );
+    }
     ztab_watcher::sync::sync_once(&state).await.unwrap();
     eprintln!("tab {tab_id} registered at birthday {birthday}");
 
@@ -1046,7 +1061,28 @@ async fn full_tab_lifecycle_on_testnet() {
         PAYMENT_ZAT
     );
     let sweep_txid = s["txid"].as_str().unwrap().to_string();
-    let signed_b64 = common::sign_like_browser(offer["pczt_b64"].as_str().unwrap(), &usk);
+    if let Ok(dir) = std::env::var("ZTAB_TEST_DUMP_DIR") {
+        common::dump_sweep_fixture(
+            std::path::Path::new(&dir),
+            &tab_seed,
+            &ufvk,
+            &addresses,
+            offer["pczt_b64"].as_str().unwrap(),
+            payer.address(),
+            s,
+        );
+        eprintln!("sweep fixture dumped to {dir}");
+    }
+    let signed_b64 = common::sign_for_test(&common::SignRequest {
+        network: &network,
+        spend_seed: &tab_seed,
+        usk: &usk,
+        ufvk: &ufvk,
+        pczt_b64: offer["pczt_b64"].as_str().unwrap(),
+        recipient: payer.address(),
+        total_zat: s["output_zat"].as_u64().unwrap(),
+        fee_zat: s["fee_zat"].as_u64().unwrap(),
+    });
     let bc = common::post(
         &addr,
         &format!("/v1/tabs/{tab_id}/broadcast"),

@@ -4,6 +4,7 @@ node_modules/
 dist/
 build/
 *.wasm
+!crypto/pkg/*.wasm
 # secrets and wallets
 *.env
 .env.*
@@ -18,5 +19,6 @@ wallets/
 .idea/
 .vscode/
 !watcher/tests/fixtures/*.pczt
+!crypto/rust/tests/fixtures/tab/*.pczt
 # SDD scratch workspace (ledgers, briefs, review diffs, test seed)
 .superpowers/

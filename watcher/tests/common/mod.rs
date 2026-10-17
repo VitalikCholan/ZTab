@@ -542,3 +542,125 @@ pub async fn wait_until(
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
 }
+
+/// Inputs the live test has when it signs the closing PCZT.
+pub struct SignRequest<'a> {
+    pub network: &'a zcash_protocol::consensus::Network,
+    pub spend_seed: &'a [u8; 32],
+    pub usk: &'a zcash_keys::keys::UnifiedSpendingKey,
+    pub ufvk: &'a str,
+    pub pczt_b64: &'a str,
+    pub recipient: &'a str,
+    pub total_zat: u64,
+    pub fee_zat: u64,
+}
+
+/// Signs like the browser. With `ZTAB_TEST_SIGNER_CMD` set, the command (run through
+/// `sh -c` from the `watcher/` directory) is the `@ztab/crypto` signer: it reads one JSON
+/// request on stdin and writes `{"ufvk","txid","signedPcztB64"}` on stdout, and the UFVK it
+/// derived must equal the one this test registered. Without the variable, signs in-process.
+pub fn sign_for_test(req: &SignRequest<'_>) -> String {
+    let Ok(cmd) = std::env::var("ZTAB_TEST_SIGNER_CMD") else {
+        return sign_like_browser(req.pczt_b64, req.usk);
+    };
+    let input = serde_json::json!({
+        "op": "sign",
+        "network": network_name(req.network),
+        "spendSeedHex": hex::encode(req.spend_seed),
+        "pcztB64": req.pczt_b64,
+        "recipient": req.recipient,
+        "totalZat": req.total_zat,
+        "feeZat": req.fee_zat,
+    });
+    let reply = run_signer_cmd(&cmd, &input);
+    assert_eq!(
+        reply["ufvk"].as_str().unwrap(),
+        req.ufvk,
+        "the browser module derived a different UFVK from the same seed"
+    );
+    reply["signedPcztB64"].as_str().unwrap().to_string()
+}
+
+/// What the browser module derives from a tab seed: its UFVK and the addresses at indices
+/// `0..participants`. `None` when `ZTAB_TEST_SIGNER_CMD` is unset (the in-process path).
+pub fn derive_for_test(
+    network: &zcash_protocol::consensus::Network,
+    spend_seed: &[u8; 32],
+    participants: u32,
+) -> Option<(String, Vec<String>)> {
+    let cmd = std::env::var("ZTAB_TEST_SIGNER_CMD").ok()?;
+    let input = serde_json::json!({
+        "op": "derive",
+        "network": network_name(network),
+        "spendSeedHex": hex::encode(spend_seed),
+        "participantsCount": participants,
+    });
+    let reply = run_signer_cmd(&cmd, &input);
+    let addresses = reply["addresses"]
+        .as_array()
+        .expect("addresses array")
+        .iter()
+        .map(|a| a.as_str().unwrap().to_string())
+        .collect();
+    Some((reply["ufvk"].as_str().unwrap().to_string(), addresses))
+}
+
+fn network_name(network: &zcash_protocol::consensus::Network) -> &'static str {
+    use zcash_protocol::consensus::Network;
+    match network {
+        Network::TestNetwork => "test",
+        Network::MainNetwork => "main",
+    }
+}
+
+/// Runs `sh -c cmd`, sends `input` as JSON on stdin and parses the JSON reply on stdout.
+fn run_signer_cmd(cmd: &str, input: &serde_json::Value) -> serde_json::Value {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn ZTAB_TEST_SIGNER_CMD");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "external signer failed: {}", out.status);
+    serde_json::from_slice(&out.stdout).expect("signer reply is JSON")
+}
+
+/// Writes a public fixture for `crypto/`: the throwaway tab's seed, its proved sweep PCZT and
+/// what the PCZT must inspect as. The tab's funds are swept by this test, so the seed is
+/// worthless afterwards and may be committed.
+pub fn dump_sweep_fixture(
+    dir: &Path,
+    spend_seed: &[u8; 32],
+    ufvk: &str,
+    addresses: &[String],
+    pczt_b64: &str,
+    recipient: &str,
+    summary: &serde_json::Value,
+) {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("spend_seed.hex"), hex::encode(spend_seed)).unwrap();
+    std::fs::write(dir.join("sweep.proved.pczt"), URL_SAFE_NO_PAD.decode(pczt_b64).unwrap()).unwrap();
+    let expected = serde_json::json!({
+        "network": "test",
+        "ufvk": ufvk,
+        "addresses": addresses,
+        "recipient": recipient,
+        "outputZat": summary["output_zat"],
+        "feeZat": summary["fee_zat"],
+        "totalInZat": summary["inputs_zat"],
+        "txid": summary["txid"],
+    });
+    std::fs::write(dir.join("expected.json"), serde_json::to_string_pretty(&expected).unwrap()).unwrap();
+}

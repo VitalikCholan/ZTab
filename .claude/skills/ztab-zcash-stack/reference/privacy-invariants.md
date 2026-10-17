@@ -11,3 +11,6 @@ Any change that violates one of these is a bug even if it makes a feature easier
 7. **Receipt triggers nothing on-chain** (ZIP 315). No auto-sweep; only a prompt to the payer.
 8. **Group-link mode reveals all shares to everyone holding the link; individual-link mode reveals only the participant's own share.** Never generate both for the same tab.
 9. **Document, do not hide.** README threat model (Zodl ICTM format, adversary tiers) must list every known weakness: modified JS from a compromised server (mitigated by SRI + static frontend), link visible to the messenger's servers, amounts of active tabs visible to the server.
+
+## Closing-PCZT invariant between watcher and browser (2026-10-16)
+- The browser module (`crypto/rust/src/pczt_ops.rs::sign`) signs a sweep only if every value-carrying Ironwood output is recoverable with the tab's **External-scope OVK** and decrypts to the expected receiver and value. The watcher therefore must keep building sweeps with `OvkPolicy::Sender` (`watcher/src/sweep.rs`); changing the OVK policy breaks closing for every tab, so treat it as a protocol change between the two subprojects.
