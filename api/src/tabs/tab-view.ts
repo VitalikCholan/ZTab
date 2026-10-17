@@ -1,6 +1,7 @@
 import type { TabRole } from '../auth/token.js';
 import type {
-  WatcherParticipant,
+  WatcherPayment,
+  WatcherStatusFacts,
   WatcherTab,
 } from '../watcher/watcher.types.js';
 
@@ -21,8 +22,12 @@ export interface TabView {
   participants: {
     index: number;
     address: string;
-    payments: WatcherParticipant['payments'];
-    status_facts: WatcherParticipant['status_facts'];
+    payments: WatcherPayment[];
+    /**
+     * `null` means "unknown": the watcher gave no facts for this index
+     * (outage or stale snapshot). Clients must not read it as "unpaid".
+     */
+    status_facts: WatcherStatusFacts | null;
   }[];
 }
 
@@ -34,11 +39,22 @@ export interface TabViewInput {
   lastKnownState: string;
 }
 
-const NO_FACTS = (): WatcherParticipant['status_facts'] => ({
-  confirmed_zat: 0,
-  mempool_zat: 0,
-  best_confirmations: 0,
-  transparent_source: false,
+/** Copies only the documented Payment fields (watcher-spec §6). */
+const pickPayment = (p: WatcherPayment): WatcherPayment => ({
+  txid: p.txid,
+  value_zat: p.value_zat,
+  mined_height: p.mined_height,
+  confirmations: p.confirmations,
+  transparent_source: p.transparent_source,
+  first_seen_at: p.first_seen_at,
+});
+
+/** Copies only the documented status_facts fields (watcher-spec §6). */
+const pickFacts = (f: WatcherStatusFacts): WatcherStatusFacts => ({
+  confirmed_zat: f.confirmed_zat,
+  mempool_zat: f.mempool_zat,
+  best_confirmations: f.best_confirmations,
+  transparent_source: f.transparent_source,
 });
 
 /**
@@ -61,8 +77,8 @@ export function buildTabView(
       return {
         index,
         address,
-        payments: w?.payments ?? [],
-        status_facts: w?.status_facts ?? NO_FACTS(),
+        payments: Array.isArray(w?.payments) ? w.payments.map(pickPayment) : [],
+        status_facts: w?.status_facts ? pickFacts(w.status_facts) : null,
       };
     });
   if (role.kind === 'participant') {

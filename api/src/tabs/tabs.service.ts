@@ -190,7 +190,9 @@ export class TabsService {
     }
     if (reachable) {
       try {
-        watcher = await this.watcher.getTab(id);
+        const got = await this.watcher.getTab(id);
+        // A malformed answer counts as no data rather than a 500.
+        watcher = Array.isArray(got?.participants) ? got : null;
       } catch (e) {
         if (!isStaleCause(e)) throw e;
         this.logger.warn(`watcher snapshot unavailable: ${(e as ApiError).code}`);
@@ -239,18 +241,28 @@ export class TabsService {
       }),
     );
     if (watcher) {
-      await this.bookkeeping(() =>
-        this.prisma.tab.update({
-          where: { id },
-          data: {
-            lastKnownState: watcher.state,
-            lastKnownAt: now,
-            ...(watcher.state === 'closed' && tab.closedAt === null
-              ? { closedAt: now }
-              : {}),
-          },
-        }),
-      );
+      const w = watcher;
+      const changed = w.state !== tab.lastKnownState;
+      const old =
+        tab.lastKnownAt === null ||
+        now.getTime() - tab.lastKnownAt.getTime() > ACTIVITY_INTERVAL_MS;
+      if (changed || old) {
+        await this.bookkeeping(() =>
+          this.prisma.tab.update({
+            where: { id },
+            data: { lastKnownState: w.state, lastKnownAt: now },
+          }),
+        );
+      }
+      if (w.state === 'closed' && tab.closedAt === null) {
+        // Set-once: a concurrent poll cannot move the timestamp.
+        await this.bookkeeping(() =>
+          this.prisma.tab.updateMany({
+            where: { id, closedAt: null },
+            data: { closedAt: now },
+          }),
+        );
+      }
     }
   }
 

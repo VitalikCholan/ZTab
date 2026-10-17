@@ -127,6 +127,53 @@ describe('GET /tabs/:id', () => {
     ]);
   });
 
+  it('participant 0 sees its own slice; participant 1 never sees 0 data', async () => {
+    const r0 = await get(p0).expect(200);
+    expect(r0.body.blob).toBe(blobs.p0);
+    expect(r0.body.participants.map((p: { index: number }) => p.index)).toEqual([0]);
+    const r1 = await get(p1).expect(200);
+    expect(r1.text).not.toContain('utest1a0');
+    expect(r1.text).not.toContain(blobs.p0);
+  });
+
+  it('group token sees all participants and the group blob', async () => {
+    const gid = randomUUID();
+    const group = randomBytes(32);
+    await prisma.tab.create({
+      data: {
+        id: gid,
+        mode: 'group',
+        participantsCount: 2,
+        ufvk: 'uviewtest1secret',
+        birthday: 1,
+        network: 'test',
+        addresses: {
+          create: [
+            { index: 0, address: 'g0' },
+            { index: 1, address: 'g1' },
+          ],
+        },
+        blobs: {
+          create: [
+            { role: 'admin', index: null, ciphertext: Buffer.from('admin') },
+            { role: 'group', index: null, ciphertext: Buffer.from('grp') },
+          ],
+        },
+        tokens: {
+          create: [{ role: 'group', index: null, tokenHash: hashToken(group) }],
+        },
+      },
+    });
+    stub.setTab(gid);
+    const res = await request(app.getHttpServer())
+      .get(`/tabs/${gid}`)
+      .set('Authorization', bearer(group))
+      .expect(200);
+    expect(res.body.role).toBe('group');
+    expect(res.body.blob).toBe(Buffer.from('grp').toString('base64'));
+    expect(res.body.participants).toHaveLength(2);
+  });
+
   it('watcher down returns stale snapshot', async () => {
     stub.failNext('getTab', 502);
     const res = await get(admin).expect(200);
@@ -141,6 +188,9 @@ describe('GET /tabs/:id', () => {
       'utest1a1',
     ]);
     expect(res.body.participants[0].payments).toEqual([]);
+    expect(
+      res.body.participants.map((p: { status_facts: unknown }) => p.status_facts),
+    ).toEqual([null, null]);
   });
 
   it('watcher that lost the tab also yields a stale snapshot', async () => {
@@ -189,6 +239,7 @@ describe('GET /tabs/:id', () => {
     expect(first.lastKnownAt).not.toBeNull();
     expect(first.closedAt).not.toBeNull();
     await new Promise((r) => setTimeout(r, 20));
+    await prisma.tab.update({ where: { id }, data: { lastKnownAt: new Date(0) } });
     await get(admin).expect(200);
     expect((await row()).closedAt!.getTime()).toBe(first.closedAt!.getTime());
   });
