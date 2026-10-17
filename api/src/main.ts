@@ -14,4 +14,7 @@ async function bootstrap(): Promise<void> {
   await app.listen(config.port);
 }
 
-void bootstrap();
+bootstrap().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : 'startup failed');
+  process.exit(1);
+});

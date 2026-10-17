@@ -10,7 +10,10 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.ts",
     "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.e2e.config.ts --runInBand",
     "typecheck": "prisma generate && tsc --noEmit",
-    "db:up": "docker compose -f docker-compose.test.yml up -d --wait"
+    "db:up": "docker compose -f docker-compose.test.yml up -d --wait",
+    "prebuild": "prisma generate",
+    "pretest": "prisma generate",
+    "pretest:e2e": "prisma generate"
   },
   "dependencies": {
     "@nestjs/common": "^12.1.3",
