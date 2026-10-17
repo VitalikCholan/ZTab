@@ -1,5 +1,6 @@
 packages:
   - crypto
+  - api
 minimumReleaseAgeExclude:
   - '@vitest/expect@4.1.12'
   - '@vitest/mocker@4.1.12'

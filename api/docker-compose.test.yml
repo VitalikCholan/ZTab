@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ztab_test
+      POSTGRES_USER: ztab
+      POSTGRES_PASSWORD: ztab
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ztab -d ztab_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
