@@ -11,6 +11,7 @@ const config: Config = {
     '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.json', useESM: true }],
   },
   testRegex: 'test/.*\\.e2e-spec\\.ts$',
+  setupFiles: ['<rootDir>/test/set-env.ts'],
   globalSetup: '<rootDir>/test/global-setup.ts',
   testTimeout: 30000,
 };

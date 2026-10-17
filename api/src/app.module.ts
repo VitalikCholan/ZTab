@@ -7,8 +7,9 @@ import { TabsModule } from './tabs/tabs.module.js';
 import { SweepModule } from './sweep/sweep.module.js';
 import { StatusModule } from './status/status.module.js';
 import { LimitsModule } from './limits/limits.module.js';
+import { LifecycleModule } from './lifecycle/lifecycle.module.js';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, HealthModule, WatcherModule, TabsModule, SweepModule, StatusModule, LimitsModule],
+  imports: [ConfigModule, PrismaModule, HealthModule, WatcherModule, TabsModule, SweepModule, StatusModule, LimitsModule, LifecycleModule],
 })
 export class AppModule {}
