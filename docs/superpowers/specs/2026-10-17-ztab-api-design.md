@@ -1,6 +1,17 @@
 # ZTab: API (`api/`, NestJS + PostgreSQL)
 
 Дата: 2026-10-17. Статус: чернетка на рев'ю.
+
+**Зміни після реалізації.** Цей документ приведено у відповідність до зібраного коду:
+- Код помилки `internal` для `500` (без деталей). Watcher `401`/`403` (хибний `WATCHER_TOKEN` у самого API) → `503 watcher_unavailable`, не проксується.
+- `status_facts: null` означає «невідомо» (немає даних watcher для цього індексу), а не «нічого не сплачено». У відповіді для учасника є поле `participant_index`.
+- `stale` = `true`, коли watcher недоступний АБО сам watcher повідомляє `stale` (віддає останні відомі факти, коли lightwalletd недоступний); висоти при цьому є, якщо є відповідь watcher.
+- Повтор `PUT /tabs/{id}` (рядок уже існує) вимагає `Authorization: Bearer <admin token>` і ідентичного набору хешів токенів; інакше `409 conflict`.
+- Ліміти рахуються за IP клієнта; бюджет створення прив'язано до обробника (не до URL). Змінні середовища `RATE_LIMIT_CREATE_PER_HOUR` (10) і `RATE_LIMIT_DEFAULT_PER_MINUTE` (120).
+- Валідація `recipient_address` і `pczt_b64` (див. §6), щоб поля поза `Authorization` не могли нести секрет.
+- Адреси від watcher при створенні перевіряються (кількість, індекси `0..n-1`, префікс мережі), інакше `503 watcher_unavailable` і нічого не зберігається.
+- API сам повертає `active: true` у watcher, якщо `GET` показує `active: false` при `paused = false` (самовідновлення, best effort); cron архівування перевіряє також таби з кешованим станом `sweeping`.
+
 Контекст: концепт-документ у корені репозиторію; watcher-spec (`2026-10-15-ztab-watcher-design.md`, §3 доменна модель, §6 контракт watcher ↔ API, §7 мінімум контракту API ↔ PWA); crypto-spec (`2026-10-16-ztab-crypto-design.md`, §4 ключі й блоби); скіл `.claude/skills/ztab-zcash-stack` (інваріанти приватності, таймінги). Цей spec не повторює їх, а посилається.
 
 ## 1. Мета і межі
@@ -53,38 +64,40 @@ API не зберігає суми, статуси, txid, імена. Усе п�
 
 ## 6. HTTP-контракт API ↔ PWA
 
-JSON, `snake_case`, суми в zatoshi цілими, час у RFC 3339 UTC. Помилки: `{ "error": { "code": "<snake_case>", "message": "<для людини>" } }`, коди `validation`, `not_found`, `unauthorized`, `forbidden`, `conflict`, `rate_limited`, `watcher_unavailable`, `watcher_rejected`.
+JSON, `snake_case`, суми в zatoshi цілими, час у RFC 3339 UTC. Помилки: `{ "error": { "code": "<snake_case>", "message": "<для людини>" } }`, коди `validation`, `not_found`, `unauthorized`, `forbidden`, `conflict`, `rate_limited`, `watcher_unavailable`, `watcher_rejected`, `internal` (`500`, без деталей).
 
 | Метод і шлях | Токен | Тіло | Відповідь |
 |---|---|---|---|
-| `PUT /tabs/{tab_id}` | ні | `{mode, participants_count, ufvk, birthday, blobs: {admin, group?, participants?[]}, token_hashes: {admin, group?, participants?[]}}`, блоби base64, хеші hex | `201 {tab_id, addresses: [{index, address}]}`; повтор з тим самим `ufvk` і тим самим `token_hashes.admin` → `200` і блоби перезаписуються (повтор після обриву); той самий `tab_id` з іншим `ufvk` або іншим адмін-хешем → `409` |
-| `GET /tabs/{tab_id}` | так | | `200 {tab_id, mode, participants_count, state, synced_height, tip_height, stale, role, blob, participants: [{index, address, payments: [Payment], status_facts}]}` — `blob` це блоб ролі (base64); `participants` для `participant(i)` містить один елемент; `state` ∈ `open | sweeping | closed | abandoned` |
-| `POST /tabs/{tab_id}/sweep` | admin | `{recipient_address}` | проксі watcher `POST /v1/tabs/{id}/sweep`: `200 {pczt_b64, summary}`; помилки watcher за правилом нижче |
-| `POST /tabs/{tab_id}/broadcast` | admin | `{pczt_b64}` | проксі: `200 {txid}`; помилки watcher за правилом нижче |
+| `PUT /tabs/{tab_id}` | ні | `{mode, participants_count, ufvk, birthday, blobs: {admin, group?, participants?[]}, token_hashes: {admin, group?, participants?[]}}`, блоби base64, хеші hex | `201 {tab_id, addresses: [{index, address}]}`; повтор (рядок існує): потрібен `Authorization: Bearer <admin token>`, той самий `ufvk`, `mode`, `participants_count`, `birthday` і ідентичний набір `token_hashes` → `200` і блоби перезаписуються в одній транзакції (повтор після обриву); будь-яка розбіжність або відсутній/хибний токен → `409 conflict` |
+| `GET /tabs/{tab_id}` | так | | `200 {tab_id, mode, participants_count, state, synced_height, tip_height, stale, role, blob, participants: [{index, address, payments: [Payment], status_facts}]}` (для `participant(i)` додається `participant_index`; `status_facts: null` = невідомо, немає даних watcher для цього індексу) — `blob` це блоб ролі (base64); `participants` для `participant(i)` містить один елемент; `state` ∈ `open | sweeping | closed | abandoned` |
+| `POST /tabs/{tab_id}/sweep` | admin | `{recipient_address}` | проксі watcher `POST /v1/tabs/{id}/sweep`: `200 {pczt_b64, summary}`; `recipient_address` має починатися з префікса unified-адреси мережі (`utest1` для `test`, `u1` для `main`), до 512 символів, тому 32-байтовий секрет у це поле не пройде; помилки watcher за правилом нижче |
+| `POST /tabs/{tab_id}/broadcast` | admin | `{pczt_b64}` | проксі: `200 {txid}`; `pczt_b64` від 256 до 49152 символів, base64url або стандартний base64 (`[A-Za-z0-9+/_-]`, `=` лише в кінці); помилки watcher за правилом нижче |
 | `GET /tabs/{tab_id}/sweep` | admin | | проксі: `{state, txid, mined_height, confirmations}` |
 | `GET /status` | ні | | `{network, tip_height, synced_height, lag_seconds, watcher: "ok" \| "stale" \| "down", block_interval_seconds}` |
 
-**Помилки watcher** завжди загортаються у формат API, ніколи не проходять сирими: watcher `4xx` → той самий HTTP-статус, `code: "watcher_rejected"`, `message` дослівно з тіла watcher (`{"error": "<рядок>"}`), плюс поле `watcher_status`; watcher `5xx`, `502` (lightwalletd недоступний) і таймаут → `503`, `code: "watcher_unavailable"`. Виняток: watcher `409` на реєстрації (`tab_id` вже зареєстрований з іншим `ufvk`) → `409`, `code: "conflict"`. PWA розрізняє причини за `message` (це власний англійський текст watcher, наприклад `not synced yet` або `not every note has 10 confirmations`); машинні коди помилок у watcher відкладені на після хакатону.
+**Помилки watcher** завжди загортаються у формат API, ніколи не проходять сирими: watcher `4xx` → той самий HTTP-статус, `code: "watcher_rejected"`, `message` дослівно з тіла watcher (`{"error": "<рядок>"}`), плюс поле `watcher_status`; watcher `5xx`, `502` (lightwalletd недоступний) і таймаут → `503`, `code: "watcher_unavailable"`; watcher `401`/`403` (хибний токен самого API) теж → `503 watcher_unavailable`. Виняток: watcher `409` на реєстрації (`tab_id` вже зареєстрований з іншим `ufvk`) → `409`, `code: "conflict"`. PWA розрізняє причини за `message` (це власний англійський текст watcher, наприклад `not synced yet` або `not every note has 10 confirmations`); машинні коди помилок у watcher відкладені на після хакатону.
 
 `Payment` і `status_facts` рівно такі, як у watcher-spec §6. API не перераховує статуси, браузер робить це сам із `status_facts` і частки з блоба.
 
 **Полінг замість push.** PWA опитує `GET /tabs/{id}` кожні 10 с (5 с на екрані учасника після натискання «Оплатити»). API ходить до watcher на вимогу і кешує відповідь `GET /v1/tabs/{id}` 5 с у пам'яті процесу; `POST /sweep` і `/broadcast` інвалідують кеш. Фонового опитування watcher немає. Обґрунтування: watcher сам не отримує push від ноди, тож SSE/WebSocket лише перенесли б те саме опитування на сервер, додавши стан з'єднань, перепідключення на мобільному, конфігурацію proxy і токен у query. Після хакатону, коли watcher отримає підписку на блоки, API зможе додати SSE поверх того самого `GET` без зміни контракту.
 
-**Якщо watcher недоступний:** `GET /tabs/{id}` повертає `200` з даними з бази (блоб, адреси), `state` = `last_known_state` (або `abandoned`, якщо `paused`), порожніми `payments`, `stale: true` і без `synced_height`/`tip_height`; `sweep`/`broadcast` → `503 watcher_unavailable`. Таймаут запиту до watcher 5 с, без retry (PWA і так повторить через 10 с).
+**`stale`** = `true`, коли watcher недоступний або сам повідомляє `stale: true` (останні відомі факти при недоступному lightwalletd; `synced_height`/`tip_height` у цьому разі присутні).
+
+**Якщо watcher недоступний:** `GET /tabs/{id}` повертає `200` з даними з бази (блоб, адреси), `state` = `last_known_state` (або `abandoned`, якщо `paused`), порожніми `payments`, `status_facts: null`, `stale: true` і без `synced_height`/`tip_height`; `sweep`/`broadcast` → `503 watcher_unavailable`. Таймаут запиту до watcher 5 с, без retry (PWA і так повторить через 10 с).
 
 ## 7. Життєвий цикл табу
 
-1. **Створення.** Валідація тіла; `participants_count` між 1 і 20; кількість блобів і хешів відповідає режиму; `ufvk` починається з `uview` для mainnet або `uviewtest` для testnet згідно з `ZTAB_NETWORK`. Потім `POST /v1/tabs` у watcher; якщо watcher відповів `422` (birthday старіший за tip − 1000) або помилкою, таб не створюється і тіло помилки watcher повертається PWA як `watcher_rejected`. Успіх: одна транзакція в базі (tab, addresses, blobs, tokens).
+1. **Створення.** Валідація тіла; `participants_count` між 1 і 20; кількість блобів і хешів відповідає режиму; `ufvk` починається з `uview` для mainnet або `uviewtest` для testnet згідно з `ZTAB_NETWORK`. Потім `POST /v1/tabs` у watcher; якщо watcher відповів `422` (birthday старіший за tip − 1000) або помилкою, таб не створюється і тіло помилки watcher повертається PWA як `watcher_rejected`. Адреси від watcher перевіряються: рівно `participants_count` елементів, індекси `0..n-1` без дублів, кожна адреса з префіксом мережі (`utest1`/`u1`); інакше `503 watcher_unavailable` і нічого не зберігається. Успіх: одна транзакція в базі (tab, addresses, blobs, tokens).
 2. **Активність.** Кожен автентифікований запит оновлює `last_access_at` (не частіше ніж раз на хвилину, щоб полінг не бив у базу).
-3. **Архівування.** Cron раз на годину: таби з `paused = false`, стан watcher `open`, `last_access_at` старіший за 7 днів → `PUT /v1/tabs/{id}/active {active: false}` у watcher, `paused = true`. Таби у `sweeping` не чіпаються.
-4. **Оживлення.** Автентифікований запит до табу з `paused = true` → `PUT /v1/tabs/{id}/active {active: true}` у watcher, `paused = false`, далі звичайна обробка. Якщо watcher недоступний, запит обслуговується зі `stale: true`, а оживлення повториться наступного разу.
+3. **Архівування.** Cron раз на годину: таби з `paused = false`, стан watcher `open`, `last_access_at` старіший за 7 днів → `PUT /v1/tabs/{id}/active {active: false}` у watcher, `paused = true`. Кеш стану може застарівати, тому вибираються таби з кешованим `open` або `sweeping`, а фактичний стан перепитується в watcher; таби, які watcher досі веде як `sweeping`, не чіпаються, `closed` отримує `closed_at`.
+4. **Оживлення.** Автентифікований запит до табу з `paused = true` → `PUT /v1/tabs/{id}/active {active: true}` у watcher, `paused = false`, далі звичайна обробка. Якщо watcher недоступний, запит обслуговується зі `stale: true`, а оживлення повториться наступного разу. Зворотний випадок: watcher відповів `active: false`, а `paused = false` → API викликає `setActive(true)` (best effort, помилка лише в лог із кодом).
 5. **Видалення.** Cron раз на добу: таби, у яких watcher показує `closed` і `closed_at` старіший за 30 днів → видалити tab, addresses, blobs, tokens. `closed_at` ставиться, коли API вперше бачить `closed` від watcher. Watcher свої записи не видаляє, це його справа.
 
 **Доробка watcher (частина цього підпроєкту):** `PUT /v1/tabs/{id}/active {active: bool}` з Bearer-токеном, ідемпотентно; `active = false` виключає таб із `open_tabs()` (мемпул-розшифрування, оновлення фактів, просування sweep), `active = true` повертає. Сканування блоків спільного `WalletDb` і далі пробує ключі всіх акаунтів, це властивість `zcash_client_sqlite` і зміні не підлягає; тобто «пауза» знімає навантаження з мемпулу й API, не з блок-скану. Повна архівація акаунту після хакатону. `GET /v1/tabs/{id}` для неактивного табу відповідає як зараз, з полем `active: false`.
 
 ## 8. Ліміти й захист від зловживань
 
-- `PUT /tabs`: 10 за годину з однієї IP (за `X-Forwarded-For` від reverse proxy, довіряти лише йому). Усі інші маршрути: 120 за хвилину з IP.
+- `PUT /tabs`: 10 за годину з однієї IP (за `X-Forwarded-For` від reverse proxy, довіряти лише йому). Усі інші маршрути: 120 за хвилину з IP. Бюджет створення прив'язано до обробника, а не до URL. Значення налаштовуються `RATE_LIMIT_CREATE_PER_HOUR` і `RATE_LIMIT_DEFAULT_PER_MINUTE` (цілі > 0).
 - Тіло запиту до 64 КБ; кожен блоб до 16 КБ; `participants_count` ≤ 20.
 - `helmet`, CORS лише для `CORS_ORIGIN`, без cookies.
 - `GET /status` кешується 5 с, щоб сторінка статусу не била watcher.
