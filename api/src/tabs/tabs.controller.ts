@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Param,
   ParseUUIDPipe,
   Put,
@@ -23,9 +24,10 @@ export class TabsController {
   async create(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(CreateTabPipe) body: CreateTabInput,
+    @Headers('authorization') authorization: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { status, body: out } = await this.tabs.create(id, body);
+    const { status, body: out } = await this.tabs.create(id, body, authorization);
     res.status(status);
     return out;
   }

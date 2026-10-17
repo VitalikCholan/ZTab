@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -10,16 +10,24 @@ import { truncateAll } from './setup-db.js';
 import { TEST_DATABASE_URL } from './test-env.js';
 
 const hex = () => randomBytes(32).toString('hex');
+const sha = (t: Buffer) => createHash('sha256').update(t).digest('hex');
+const bearer = (t: Buffer) => `Bearer ${t.toString('base64url')}`;
+// Real tokens behind the hashes sent by groupBody, keyed by admin hash.
+const adminTokens = new Map<string, Buffer>();
+const adminAuth = (body: { token_hashes: { admin: string } }) =>
+  bearer(adminTokens.get(body.token_hashes.admin)!);
 const blob = () => randomBytes(24).toString('base64');
 
 function groupBody(overrides: Record<string, unknown> = {}) {
+  const admin = randomBytes(32);
+  adminTokens.set(sha(admin), admin);
   return {
     mode: 'group',
     participants_count: 3,
     ufvk: 'uviewtest1abc',
     birthday: 3_000_000,
     blobs: { admin: blob(), group: blob() },
-    token_hashes: { admin: hex(), group: hex() },
+    token_hashes: { admin: sha(admin), group: hex() },
     ...overrides,
   };
 }
@@ -67,8 +75,10 @@ describe('PUT /tabs/:id', () => {
     await stub.stop();
   });
 
-  const put = (id: string, body: unknown) =>
-    request(app.getHttpServer()).put(`/tabs/${id}`).send(body as object);
+  const put = (id: string, body: unknown, auth?: string) => {
+    const r = request(app.getHttpServer()).put(`/tabs/${id}`);
+    return (auth ? r.set('Authorization', auth) : r).send(body as object);
+  };
 
   const counts = async () => ({
     tabs: await prisma.tab.count(),
@@ -147,10 +157,11 @@ describe('PUT /tabs/:id', () => {
     const first = await put(id, body);
     expect(first.status).toBe(201);
     const before = await counts();
-    const second = await put(id, {
-      ...body,
-      blobs: { admin: blob(), group: blob() },
-    });
+    const second = await put(
+      id,
+      { ...body, blobs: { admin: blob(), group: blob() } },
+      adminAuth(body),
+    );
     expect(second.status).toBe(200);
     expect(second.body).toEqual(first.body);
     expect(await counts()).toEqual(before);
@@ -162,7 +173,7 @@ describe('PUT /tabs/:id', () => {
     const body = groupBody();
     await put(id, body);
     const newBlobs = { admin: blob(), group: blob() };
-    const res = await put(id, { ...body, blobs: newBlobs });
+    const res = await put(id, { ...body, blobs: newBlobs }, adminAuth(body));
     expect(res.status).toBe(200);
     const blobs = await prisma.tabBlob.findMany({ where: { tabId: id } });
     expect(
@@ -174,19 +185,70 @@ describe('PUT /tabs/:id', () => {
     const id = randomUUID();
     const body = groupBody();
     await put(id, body);
-    const res = await put(id, {
-      ...body,
-      token_hashes: { admin: body.token_hashes.admin, group: hex() },
-    });
+    const res = await put(
+      id,
+      {
+        ...body,
+        token_hashes: { admin: body.token_hashes.admin, group: hex() },
+      },
+      adminAuth(body),
+    );
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('conflict');
+  });
+
+  describe('retry requires the admin token', () => {
+    const storedBlobs = async (id: string) =>
+      (await prisma.tabBlob.findMany({ where: { tabId: id } }))
+        .map((b) => Buffer.from(b.ciphertext).toString('base64'))
+        .sort();
+
+    async function setup() {
+      const group = randomBytes(32);
+      const id = randomUUID();
+      const body = groupBody();
+      body.token_hashes.group = sha(group);
+      await put(id, body);
+      const original = await storedBlobs(id);
+      const forged = { ...body, blobs: { admin: blob(), group: blob() } };
+      return { id, forged, original, group };
+    }
+
+    it('without a token is 409 and blobs are unchanged', async () => {
+      const { id, forged, original } = await setup();
+      const res = await put(id, forged);
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('conflict');
+      expect(await storedBlobs(id)).toEqual(original);
+    });
+
+    it('with a participant-level (group) token is 409', async () => {
+      const { id, forged, original, group } = await setup();
+      const res = await put(id, forged, bearer(group));
+      expect(res.status).toBe(409);
+      expect(await storedBlobs(id)).toEqual(original);
+    });
+
+    it('with a wrong 32-byte token is 409', async () => {
+      const { id, forged, original } = await setup();
+      const res = await put(id, forged, bearer(randomBytes(32)));
+      expect(res.status).toBe(409);
+      expect(await storedBlobs(id)).toEqual(original);
+    });
+
+    it('with a malformed header is 409', async () => {
+      const { id, forged, original } = await setup();
+      const res = await put(id, forged, 'Bearer nope');
+      expect(res.status).toBe(409);
+      expect(await storedBlobs(id)).toEqual(original);
+    });
   });
 
   it('same id with a different ufvk is 409 conflict', async () => {
     const id = randomUUID();
     const body = groupBody();
     await put(id, body);
-    const res = await put(id, { ...body, ufvk: 'uviewtest1other' });
+    const res = await put(id, { ...body, ufvk: 'uviewtest1other' }, adminAuth(body));
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('conflict');
   });

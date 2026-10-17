@@ -1,5 +1,7 @@
+import { timingSafeEqual } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { TabRole } from '../auth/token.js';
+import { hashToken, parseBearer } from '../auth/token.js';
 import { ApiError } from '../common/api-error.js';
 import { CONFIG, type Config } from '../config/config.js';
 import { Prisma, type Tab } from '../generated/prisma/client.js';
@@ -64,7 +66,11 @@ export class TabsService {
     @Inject(CONFIG) private readonly config: Config,
   ) {}
 
-  async create(rawId: string, input: CreateTabInput): Promise<CreateTabResult> {
+  async create(
+    rawId: string,
+    input: CreateTabInput,
+    authorization?: string,
+  ): Promise<CreateTabResult> {
     const id = rawId.toLowerCase();
     const blobs = entries(input.blobs);
     const hashes = entries(input.token_hashes);
@@ -73,7 +79,7 @@ export class TabsService {
       where: { id },
       include: { addresses: true, tokens: true },
     });
-    if (existing) return this.retry(existing, input, blobs);
+    if (existing) return this.retry(existing, input, blobs, authorization);
 
     // Register first: if the watcher refuses, nothing is stored.
     const registered = await this.watcher.registerTab({
@@ -125,13 +131,22 @@ export class TabsService {
    * registration is accepted: same ufvk, mode, count, birthday and exactly the
    * stored token hashes. Token hashes are never changed here, because
    * replacing them would lock out participants who already hold the old
-   * tokens. Every blob of the tab is replaced in one transaction.
+   * tokens. The admin token must be presented as a Bearer header. Every blob of the tab is replaced in one transaction.
    */
   private async retry(
     existing: Prisma.TabGetPayload<{ include: { addresses: true; tokens: true } }>,
     input: CreateTabInput,
     blobs: Entry[],
+    authorization: string | undefined,
   ): Promise<CreateTabResult> {
+    // Defence in depth: a retry must also prove the admin token. A missing,
+    // malformed or wrong token gets the same 409 as any other mismatch.
+    const adminRow = existing.tokens.find((t) => t.role === 'admin');
+    const presented = parseBearer(authorization);
+    const authorized =
+      adminRow !== undefined &&
+      presented !== null &&
+      timingSafeEqual(hashToken(presented), Buffer.from(adminRow.tokenHash));
     const stored = new Map(
       existing.tokens.map((t) => [key(t), Buffer.from(t.tokenHash).toString('hex')]),
     );
@@ -143,7 +158,7 @@ export class TabsService {
       existing.birthday === input.birthday &&
       stored.size === sent.length &&
       sent.every((h) => stored.get(key(h)) === h.value);
-    if (!same) {
+    if (!authorized || !same) {
       throw new ApiError(409, 'conflict', 'tab already exists with different parameters');
     }
 
