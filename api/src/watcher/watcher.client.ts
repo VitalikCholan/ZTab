@@ -26,6 +26,7 @@ export interface WatcherClientOptions {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_CACHE_TTL_MS = 5000;
+const MAX_CACHE_ENTRIES = 10_000;
 
 /**
  * HTTP client for the watcher. No retries. Errors are mapped to ApiError:
@@ -41,6 +42,8 @@ export class WatcherClient {
   private readonly timeoutMs: number;
   private readonly cacheTtlMs: number;
   private readonly cache = new Map<string, { at: number; tab: WatcherTab }>();
+  /** Bumped on invalidation so an in-flight getTab cannot cache stale data. */
+  private readonly generations = new Map<string, number>();
 
   constructor(
     @Inject(CONFIG) private readonly config: Config,
@@ -59,14 +62,38 @@ export class WatcherClient {
 
   async getTab(id: string): Promise<WatcherTab> {
     const hit = this.cache.get(id);
-    if (hit && this.now() - hit.at < this.cacheTtlMs) return hit.tab;
+    if (hit && this.now() - hit.at < this.cacheTtlMs) {
+      return structuredClone(hit.tab);
+    }
+    const generation = this.generations.get(id) ?? 0;
     const tab = await this.request<WatcherTab>(
       'getTab',
       'GET',
       `/v1/tabs/${encodeURIComponent(id)}`,
     );
-    this.cache.set(id, { at: this.now(), tab });
+    if ((this.generations.get(id) ?? 0) === generation) {
+      this.prune();
+      this.cache.set(id, { at: this.now(), tab: structuredClone(tab) });
+    }
     return tab;
+  }
+
+  private invalidate(id: string): void {
+    this.cache.delete(id);
+    this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+  }
+
+  /** Drop expired entries; hard-cap the map as a backstop. */
+  private prune(): void {
+    const t = this.now();
+    for (const [key, e] of this.cache) {
+      if (t - e.at >= this.cacheTtlMs) this.cache.delete(key);
+    }
+    while (this.cache.size >= MAX_CACHE_ENTRIES) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
   }
 
   async setActive(id: string, active: boolean): Promise<void> {
@@ -79,7 +106,7 @@ export class WatcherClient {
         { noContent: true },
       );
     } finally {
-      this.cache.delete(id);
+      this.invalidate(id);
     }
   }
 
@@ -92,7 +119,7 @@ export class WatcherClient {
         body,
       );
     } finally {
-      this.cache.delete(id);
+      this.invalidate(id);
     }
   }
 
@@ -108,7 +135,7 @@ export class WatcherClient {
         body,
       );
     } finally {
-      this.cache.delete(id);
+      this.invalidate(id);
     }
   }
 
@@ -141,6 +168,7 @@ export class WatcherClient {
           ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: 'error',
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -163,6 +191,13 @@ export class WatcherClient {
         this.logger.warn(`watcher ${op}: unreadable response`);
         throw unavailable();
       }
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      // Our own WATCHER_TOKEN is wrong: an operator problem, not the caller's.
+      await res.body?.cancel();
+      this.logger.error('watcher auth rejected: check WATCHER_TOKEN');
+      throw unavailable();
     }
 
     if (res.status >= 400 && res.status < 500) {

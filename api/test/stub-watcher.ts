@@ -43,6 +43,7 @@ export class StubWatcher {
   private readonly sweepResults = new Map<string, WatcherSweepResult>();
   private readonly registered = new Map<string, string>(); // tab_id -> ufvk
   private delayMs = 0;
+  private authToken: string | undefined;
   private healthFacts: WatcherHealth = {
     tip_height: 100,
     synced_height: 100,
@@ -79,6 +80,15 @@ export class StubWatcher {
     this.sweepResults.clear();
     this.registered.clear();
     this.delayMs = 0;
+    this.authToken = undefined;
+  }
+
+  /**
+   * Require `Authorization: Bearer <token>` on every route except
+   * /v1/health (like the real watcher); undefined disables the check.
+   */
+  setAuthToken(token: string | undefined): void {
+    this.authToken = token;
   }
 
   /** Script the facts returned by GET /v1/tabs/{id}. */
@@ -169,6 +179,15 @@ export class StubWatcher {
       body,
     });
 
+    if (
+      this.authToken !== undefined &&
+      route !== 'health' &&
+      req.headers.authorization !== `Bearer ${this.authToken}`
+    ) {
+      json(401, { error: 'unauthorized' });
+      return;
+    }
+
     if (this.delayMs > 0) {
       await new Promise((r) => setTimeout(r, this.delayMs));
     }
@@ -181,6 +200,11 @@ export class StubWatcher {
           ? { error: 'internal' }
           : { error: failure.message ?? 'rejected' },
       );
+      return;
+    }
+
+    if (route !== 'register' && route !== 'health' && !this.tabs.has(id)) {
+      json(404, { error: 'tab not found' });
       return;
     }
 
@@ -197,13 +221,25 @@ export class StubWatcher {
           return;
         }
         this.registered.set(b.tab_id, b.ufvk);
-        json(201, {
-          tab_id: b.tab_id,
-          addresses: Array.from({ length: b.participants_count }, (_, i) => ({
-            index: i,
-            address: `utest1stub${b.tab_id}x${i}`,
-          })),
-        });
+        const addresses = Array.from(
+          { length: b.participants_count },
+          (_, i) => ({ index: i, address: `utest1stub${b.tab_id}x${i}` }),
+        );
+        if (!this.tabs.has(b.tab_id)) {
+          this.setTab(b.tab_id, {
+            participants: addresses.map((a) => ({
+              ...a,
+              payments: [],
+              status_facts: {
+                confirmed_zat: 0,
+                mempool_zat: 0,
+                best_confirmations: 0,
+                transparent_source: false,
+              },
+            })),
+          });
+        }
+        json(201, { tab_id: b.tab_id, addresses });
         return;
       }
       case 'getTab': {
@@ -241,6 +277,7 @@ export class StubWatcher {
         );
         return;
       case 'broadcast':
+        this.tabs.get(id)!.state = 'sweeping';
         json(200, { txid: 'aa'.repeat(32) });
         return;
       case 'sweepStatus':
