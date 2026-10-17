@@ -7,7 +7,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::Response,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use std::sync::{
@@ -69,6 +69,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/health", get(health::health))
         .route("/v1/tabs", post(tabs::register))
         .route("/v1/tabs/{tab_id}", get(tabs::get_tab))
+        .route("/v1/tabs/{tab_id}/active", put(tabs::set_active))
         .route(
             "/v1/tabs/{tab_id}/sweep",
             post(sweep::offer).get(sweep::status),

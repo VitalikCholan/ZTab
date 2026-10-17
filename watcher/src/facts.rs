@@ -38,6 +38,7 @@ pub struct ParticipantFacts {
 pub struct TabFacts {
     pub tab_id: Uuid,
     pub state: TabState,
+    pub active: bool,
     pub synced_height: u32,
     pub tip_height: u32,
     pub stale: bool,
@@ -247,6 +248,7 @@ pub fn tab_facts(
     Ok(TabFacts {
         tab_id: tab.tab_id,
         state: tab.state,
+        active: tab.active,
         synced_height: synced,
         tip_height: tip,
         stale,
