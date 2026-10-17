@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/setup.js';
+import { LIMITS_OPTIONS } from '../src/limits/limits.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { StubWatcher } from './stub-watcher.js';
 import { truncateAll } from './setup-db.js';
@@ -56,7 +57,15 @@ describe('PUT /tabs/:id', () => {
     process.env.ZTAB_NETWORK = 'test';
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      // This suite creates far more than 10 tabs from one IP; limits are
+      // covered by limits.e2e-spec.ts.
+      .overrideProvider(LIMITS_OPTIONS)
+      .useValue({
+        create: { limit: 10_000, ttlMs: 60_000 },
+        default: { limit: 10_000, ttlMs: 60_000 },
+      })
+      .compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
     configureApp(app);
     await app.init();

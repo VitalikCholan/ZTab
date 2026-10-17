@@ -5,8 +5,10 @@ import { HealthModule } from './health/health.module.js';
 import { WatcherModule } from './watcher/watcher.module.js';
 import { TabsModule } from './tabs/tabs.module.js';
 import { SweepModule } from './sweep/sweep.module.js';
+import { StatusModule } from './status/status.module.js';
+import { LimitsModule } from './limits/limits.module.js';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, HealthModule, WatcherModule, TabsModule, SweepModule],
+  imports: [ConfigModule, PrismaModule, HealthModule, WatcherModule, TabsModule, SweepModule, StatusModule, LimitsModule],
 })
 export class AppModule {}

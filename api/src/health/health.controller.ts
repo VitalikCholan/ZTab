@@ -1,6 +1,9 @@
 import { Controller, Get } from '@nestjs/common';
+import { SkipThrottle } from '../limits/throttler.js';
 import { version } from './version.js';
 
+/** Exempt from rate limiting: probes must never be throttled. */
+@SkipThrottle()
 @Controller()
 export class HealthController {
   @Get('healthz')

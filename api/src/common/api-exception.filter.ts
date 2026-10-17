@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ZodError } from 'zod';
+import { ERROR_CODE_LOCAL } from './request-logger.js';
 import { ApiError, type ApiErrorCode } from './api-error.js';
 
 function codeForStatus(status: number): ApiErrorCode {
@@ -84,6 +85,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       this.logger.error(`${req.method} ${req.path} ${status} ${code} ${name}`);
     }
 
+    res.locals[ERROR_CODE_LOCAL] = code;
     res.status(status).json({ error: { ...extra, code, message } });
   }
 }
