@@ -12,6 +12,8 @@
     "skipLibCheck": true,
     "sourceMap": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "types": ["node", "jest"]
   },
   "include": ["src", "test", "prisma.config.ts", "jest*.ts"]

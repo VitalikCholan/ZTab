@@ -24,6 +24,7 @@
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
     "helmet": "8.3.0",
+    "prisma": "7.10.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "zod": "^4.6.7"
@@ -36,9 +37,9 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^24.19.2",
     "@types/supertest": "^7.2.1",
+    "@ztab/crypto": "workspace:*",
     "dotenv": "^18.0.8",
     "jest": "^30.5.2",
-    "prisma": "7.10.1",
     "supertest": "^7.3.1",
     "ts-jest": "^29.4.15",
     "ts-node": "^10.9.2",

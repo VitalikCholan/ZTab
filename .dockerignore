@@ -1,0 +1,11 @@
+**/node_modules
+**/target
+watcher/target
+.superpowers
+.git
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+**/docker-compose.test.yml
+api/src/generated
