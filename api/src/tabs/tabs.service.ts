@@ -186,23 +186,10 @@ export class TabsService {
    */
   async read(tab: Tab, role: TabRole): Promise<TabView> {
     const id = tab.id;
-    let paused = tab.paused;
     let watcher: WatcherTab | null = null;
 
-    let reachable = true;
-    if (paused) {
-      try {
-        await this.watcher.setActive(id, true);
-        paused = false;
-        await this.bookkeeping(() =>
-          this.prisma.tab.update({ where: { id }, data: { paused: false } }),
-        );
-      } catch (e) {
-        if (!isStaleCause(e)) throw e;
-        this.logger.warn(`revival failed: ${(e as ApiError).code}`);
-        reachable = false;
-      }
-    }
+    const reachable = await this.ensureActive(tab);
+    const paused = tab.paused && !reachable;
     if (reachable) {
       try {
         const got = await this.watcher.getTab(id);
@@ -240,6 +227,27 @@ export class TabsService {
       role,
       watcher,
     );
+  }
+
+  /**
+   * Revives a paused tab at the watcher and clears `paused` on success.
+   * Returns false when the watcher cannot be reached (or has lost the tab);
+   * any other failure propagates.
+   */
+  async ensureActive(tab: Tab): Promise<boolean> {
+    if (!tab.paused) return true;
+    const id = tab.id;
+    try {
+      await this.watcher.setActive(id, true);
+    } catch (e) {
+      if (!isStaleCause(e)) throw e;
+      this.logger.warn(`revival failed: ${(e as ApiError).code}`);
+      return false;
+    }
+    await this.bookkeeping(() =>
+      this.prisma.tab.update({ where: { id }, data: { paused: false } }),
+    );
+    return true;
   }
 
   private async recordActivity(tab: Tab, watcher: WatcherTab | null) {

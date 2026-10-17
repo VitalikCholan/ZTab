@@ -8,5 +8,6 @@ import { TabsService } from './tabs.service.js';
   imports: [WatcherModule],
   controllers: [TabsController],
   providers: [TabsService, CreateTabPipe],
+  exports: [TabsService],
 })
 export class TabsModule {}
