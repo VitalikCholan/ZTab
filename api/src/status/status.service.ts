@@ -59,7 +59,10 @@ export class StatusService {
         tip_height: h.tip_height,
         synced_height: h.synced_height,
         lag_seconds: h.lag_seconds,
-        watcher: h.lag_seconds > 3 * interval ? 'stale' : 'ok',
+        watcher:
+          Number.isFinite(h.lag_seconds) && h.lag_seconds <= 3 * interval
+            ? 'ok'
+            : 'stale',
       };
     } catch {
       return {

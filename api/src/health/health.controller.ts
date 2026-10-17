@@ -3,7 +3,7 @@ import { SkipThrottle } from '../limits/throttler.js';
 import { version } from './version.js';
 
 /** Exempt from rate limiting: probes must never be throttled. */
-@SkipThrottle()
+@SkipThrottle({ default: true, create: true })
 @Controller()
 export class HealthController {
   @Get('healthz')

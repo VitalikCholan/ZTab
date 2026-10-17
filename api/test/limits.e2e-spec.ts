@@ -75,9 +75,21 @@ describe('limits (real values)', () => {
     });
   });
 
-  it('does not count creations against the default budget and vice versa', async () => {
+  it('keeps the create and default budgets separate, both ways', async () => {
     for (let i = 0; i < 10; i++) await put().expect(201);
     await request(app.getHttpServer()).get('/status').expect(200);
+  });
+
+  it('counts PUT /TABS and /Tabs (case-insensitive routing) against create', async () => {
+    const paths = ['tabs', 'TABS', 'Tabs'];
+    for (let i = 0; i < 10; i++) {
+      await request(app.getHttpServer())
+        .put(`/${paths[i % 3]}/${randomUUID()}`)
+        .send(body())
+        .expect(201);
+    }
+    await request(app.getHttpServer()).put(`/TABS/${randomUUID()}`).send(body()).expect(429);
+    await put().expect(429);
   });
 });
 
@@ -96,6 +108,23 @@ describe('limits (lowered)', () => {
     await put('9.9.9.9, 2.2.2.2').expect(429);
     // ...but a different last hop (another client behind the proxy) does.
     await put('1.1.1.1, 3.3.3.3').expect(201);
+  });
+
+  it('exhausting default leaves create untouched', async () => {
+    for (let i = 0; i < 4; i++) await request(app.getHttpServer()).get('/status').expect(200);
+    await request(app.getHttpServer()).get('/status').expect(429);
+    await put().expect(201);
+  });
+
+  it('default budget is per client across routes, not per route', async () => {
+    const id = randomUUID();
+    const get = (path: string) => request(app.getHttpServer()).get(path);
+    await get(`/tabs/${id}`).expect(401);
+    await get('/status').expect(200);
+    await get(`/tabs/${id}/sweep`).expect(401);
+    await get(`/tabs/${id}`).expect(401);
+    // Fifth request overall (budget 4) is refused on a route not yet used twice.
+    await get(`/tabs/${id}/sweep`).expect(429);
   });
 
   it('limits other routes with the default budget and exempts /healthz', async () => {

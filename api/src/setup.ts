@@ -10,6 +10,9 @@ export const BODY_LIMIT = '64kb';
 /** App-level setup shared by main.ts and the e2e tests. */
 export function configureApp(app: INestApplication): void {
   const express = app as NestExpressApplication;
+  // req.ip is the last X-Forwarded-For hop. Without exactly one reverse proxy
+  // in front, a client could pick its own IP and dodge rate limits, so
+  // production must sit behind one proxy (spec §8, §10).
   express.set('trust proxy', 1);
   const config = app.get<Config>(CONFIG);
   express.use(requestLogger());

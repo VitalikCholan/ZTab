@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { CreateBudget } from '../limits/limits.js';
 import { TabAuthGuard, type TabAuthRequest } from '../auth/tab-auth.guard.js';
 import { CreateTabPipe } from './create-tab.pipe.js';
 import type { CreateTabInput } from './create-tab.schema.js';
@@ -21,6 +22,7 @@ export class TabsController {
   constructor(private readonly tabs: TabsService) {}
 
   @Put(':id')
+  @CreateBudget()
   async create(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(CreateTabPipe) body: CreateTabInput,

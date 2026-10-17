@@ -1,3 +1,4 @@
+import { SetMetadata, type ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';
 
 export const LIMITS_OPTIONS = Symbol('LIMITS_OPTIONS');
@@ -20,9 +21,22 @@ export const DEFAULT_LIMITS: LimitsOptions = {
   default: { limit: 120, ttlMs: 60_000 },
 };
 
-/** True for `PUT /tabs/{id}` (the only route under the `create` budget). */
-export function isCreateRoute(req: Pick<Request, 'method' | 'path'>): boolean {
-  return req.method === 'PUT' && /^\/tabs\/[^/]+\/?$/.test(req.path);
+const CREATE_BUDGET = 'ztab:create-budget';
+
+/**
+ * Marks a handler as tab creation: it is counted against the `create` budget
+ * instead of `default`. Bound to the handler, not the URL, so Express's
+ * case-insensitive routing cannot dodge it; any route without it gets `default`.
+ */
+export const CreateBudget = () => SetMetadata(CREATE_BUDGET, true);
+
+export function usesCreateBudget(handler: Function): boolean {
+  return Reflect.getMetadata(CREATE_BUDGET, handler) === true;
+}
+
+/** One counter per named budget and client, shared by every route. */
+export function budgetKey(_ctx: ExecutionContext, tracker: string, name: string): string {
+  return `${name}:${tracker}`;
 }
 
 /**

@@ -62,28 +62,33 @@ describe('logging policy', () => {
     const admin = randomBytes(32);
     const adminB64 = admin.toString('base64url');
     const blobs = { admin: randomBytes(24).toString('base64'), group: randomBytes(24).toString('base64') };
-    const put = await request(app.getHttpServer())
-      .put(`/tabs/${id}`)
-      .send({
-        mode: 'group',
-        participants_count: 2,
-        ufvk: 'uviewtest1secret',
-        birthday: 3_000_000,
-        blobs,
-        token_hashes: { admin: sha(admin), group: randomBytes(32).toString('hex') },
-      });
-    const read = await request(app.getHttpServer())
-      .get(`/tabs/${id}`)
-      .set('Authorization', `Bearer ${adminB64}`);
-    const sweep = await request(app.getHttpServer())
-      .post(`/tabs/${id}/sweep`)
-      .set('Authorization', `Bearer ${adminB64}`)
-      .send({ recipient_address: 'utest1dest' });
-    const denied = await request(app.getHttpServer())
-      .get(`/tabs/${id}`)
-      .set('Authorization', `Bearer ${randomBytes(32).toString('base64url')}`);
+    let put: request.Response, read: request.Response, sweep: request.Response, denied: request.Response;
+    try {
+      put = await request(app.getHttpServer())
+        .put(`/tabs/${id}`)
+        .send({
+          mode: 'group',
+          participants_count: 2,
+          ufvk: 'uviewtest1secret',
+          birthday: 3_000_000,
+          blobs,
+          token_hashes: { admin: sha(admin), group: randomBytes(32).toString('hex') },
+        });
+      read = await request(app.getHttpServer())
+        .get(`/tabs/${id}`)
+        .set('Authorization', `Bearer ${adminB64}`);
+      sweep = await request(app.getHttpServer())
+        .post(`/tabs/${id}/sweep`)
+        .set('Authorization', `Bearer ${adminB64}`)
+        .send({ recipient_address: 'utest1dest' });
+      denied = await request(app.getHttpServer())
+        .get(`/tabs/${id}`)
+        .set('Authorization', `Bearer ${randomBytes(32).toString('base64url')}`);
 
-    restore.forEach((r) => r());
+
+    } finally {
+      restore.forEach((r) => r());
+    }
     expect([put.status, read.status, sweep.status, denied.status]).toEqual([201, 200, 200, 404]);
 
     const out = captured.join('');

@@ -1,11 +1,11 @@
 import { Global, Module, type ExecutionContext } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from './throttler.js';
-import type { Request } from 'express';
 import {
   DEFAULT_LIMITS,
   LIMITS_OPTIONS,
-  isCreateRoute,
+  budgetKey,
+  usesCreateBudget,
   trackerOf,
   type LimitsOptions,
 } from './limits.js';
@@ -18,9 +18,6 @@ import {
 })
 class LimitsConfigModule {}
 
-const req = (ctx: ExecutionContext): Request =>
-  ctx.switchToHttp().getRequest<Request>();
-
 @Module({
   imports: [
     LimitsConfigModule,
@@ -31,18 +28,19 @@ const req = (ctx: ExecutionContext): Request =>
         // In-memory storage (default). Each request is counted against exactly
         // one budget: `create` for PUT /tabs/{id}, `default` otherwise.
         getTracker: trackerOf,
+        generateKey: budgetKey,
         throttlers: [
           {
             name: 'create',
             limit: limits.create.limit,
             ttl: limits.create.ttlMs,
-            skipIf: (ctx) => !isCreateRoute(req(ctx)),
+            skipIf: (ctx) => !usesCreateBudget(ctx.getHandler()),
           },
           {
             name: 'default',
             limit: limits.default.limit,
             ttl: limits.default.ttlMs,
-            skipIf: (ctx) => isCreateRoute(req(ctx)),
+            skipIf: (ctx) => usesCreateBudget(ctx.getHandler()),
           },
         ],
       }),
