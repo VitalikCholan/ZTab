@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import type { INestApplication } from '@nestjs/common';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { Logger, type INestApplication } from '@nestjs/common';
+import { jest } from '@jest/globals';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/setup.js';
@@ -66,7 +67,7 @@ describe('lifecycle', () => {
         ...data,
         addresses: { create: [{ index: 0, address: 'utest1a' }] },
         blobs: { create: [{ role: 'admin', index: null, ciphertext: Buffer.from('a') }] },
-        tokens: { create: [{ role: 'admin', index: null, tokenHash: Buffer.alloc(32, id.charCodeAt(0) + id.charCodeAt(1)) }] },
+        tokens: { create: [{ role: 'admin', index: null, tokenHash: randomBytes(32) }] },
       },
     });
     stub.setTab(id);
@@ -114,7 +115,66 @@ describe('lifecycle', () => {
       expect(states.filter(Boolean)).toHaveLength(1);
     });
 
-    it('pauses the tab when the watcher no longer knows it (404)', async () => {
+    it('does not archive a tab accessed mid-call, and undoes the watcher pause', async () => {
+      const id = await seed({ lastAccessAt: ago(8 * DAY) });
+      stub.onNext('setActive', async () => {
+        await prisma.tab.update({ where: { id }, data: { lastAccessAt: now } });
+      });
+      expect(await lifecycle.archiveIdle(now)).toBe(0);
+      expect(await paused(id)).toBe(false);
+      expect(stub.callsTo('setActive').map((c) => c.body)).toEqual([
+        { active: false },
+        { active: true },
+      ]);
+    });
+
+    it('keeps paused=false and warns when the undo fails', async () => {
+      const id = await seed({ lastAccessAt: ago(8 * DAY) });
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      stub.onNext('setActive', async () => {
+        await prisma.tab.update({ where: { id }, data: { lastAccessAt: now } });
+        // Fail the undo (the next setActive request), not this one.
+        stub.onNext('setActive', async () => stub.failNext('setActive', 503));
+      });
+      expect(await lifecycle.archiveIdle(now)).toBe(0);
+      expect(await paused(id)).toBe(false);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('could not undo'))).toBe(true);
+      warn.mockRestore();
+    });
+
+    it('does not pause a tab the watcher reports as sweeping, and refreshes the cache', async () => {
+      const id = await seed({ lastAccessAt: ago(8 * DAY) });
+      stub.setTab(id, { state: 'sweeping' });
+      expect(await lifecycle.archiveIdle(now)).toBe(0);
+      const tab = await prisma.tab.findUniqueOrThrow({ where: { id } });
+      expect(tab.paused).toBe(false);
+      expect(tab.lastKnownState).toBe('sweeping');
+      expect(tab.lastKnownAt).toEqual(now);
+      expect(stub.callsTo('setActive')).toHaveLength(0);
+    });
+
+    it('records closed tabs with closed_at so purge removes them later', async () => {
+      const id = await seed({ lastAccessAt: ago(8 * DAY) });
+      stub.setTab(id, { state: 'closed' });
+      expect(await lifecycle.archiveIdle(now)).toBe(0);
+      const tab = await prisma.tab.findUniqueOrThrow({ where: { id } });
+      expect(tab.paused).toBe(false);
+      expect(tab.lastKnownState).toBe('closed');
+      expect(tab.closedAt).toEqual(now);
+      expect(stub.callsTo('setActive')).toHaveLength(0);
+      expect(await lifecycle.purgeClosed(new Date(now.getTime() + 31 * DAY))).toBe(1);
+      expect(await prisma.tab.count({ where: { id } })).toBe(0);
+    });
+
+    it('leaves a tab unchanged when getTab fails', async () => {
+      const id = await seed({ lastAccessAt: ago(8 * DAY) });
+      stub.failNext('getTab', 503);
+      expect(await lifecycle.archiveIdle(now)).toBe(0);
+      expect(await paused(id)).toBe(false);
+      expect(stub.callsTo('setActive')).toHaveLength(0);
+    });
+
+    it('pauses without a setActive call when getTab says 404', async () => {
       const id = randomUUID();
       await prisma.tab.create({
         data: {
@@ -124,19 +184,7 @@ describe('lifecycle', () => {
       });
       expect(await lifecycle.archiveIdle(now)).toBe(1);
       expect(await paused(id)).toBe(true);
-    });
-
-    it('does not archive a tab accessed after the cutoff was read, and undoes the watcher pause', async () => {
-      const id = await seed({ lastAccessAt: ago(8 * DAY) });
-      // Simulate an access landing while the watcher call is in flight.
-      stub.setDelay(150);
-      const run = lifecycle.archiveIdle(now);
-      await new Promise((r) => setTimeout(r, 50));
-      await prisma.tab.update({ where: { id }, data: { lastAccessAt: now } });
-      expect(await run).toBe(0);
-      expect(await paused(id)).toBe(false);
-      const bodies = stub.callsTo('setActive').map((c) => c.body);
-      expect(bodies).toEqual([{ active: false }, { active: true }]);
+      expect(stub.callsTo('setActive')).toHaveLength(0);
     });
 
     it('processes more than one batch', async () => {
@@ -145,7 +193,29 @@ describe('lifecycle', () => {
     });
   });
 
+  describe('cron wrappers', () => {
+    it('catch errors from the runs', async () => {
+      const err = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      const a = jest.spyOn(lifecycle, 'archiveIdle').mockRejectedValueOnce(new Error('db down'));
+      const p = jest.spyOn(lifecycle, 'purgeClosed').mockRejectedValueOnce(new Error('db down'));
+      await expect(lifecycle.archiveIdleJob()).resolves.toBeUndefined();
+      await expect(lifecycle.purgeClosedJob()).resolves.toBeUndefined();
+      expect(err).toHaveBeenCalledTimes(2);
+      expect(String(err.mock.calls[0][0])).toContain('Error');
+      expect(String(err.mock.calls[0][0])).not.toContain('db down');
+      a.mockRestore();
+      p.mockRestore();
+      err.mockRestore();
+    });
+  });
+
   describe('purgeClosed', () => {
+    it('purges across several batches', async () => {
+      for (let i = 0; i < 5; i++) await seed({ lastKnownState: 'closed', closedAt: ago(40 * DAY) });
+      expect(await lifecycle.purgeClosed(now, 2)).toBe(5);
+      expect(await prisma.tab.count()).toBe(0);
+    });
+
     it('deletes a tab closed 31 days ago with all its rows', async () => {
       const id = await seed({ lastKnownState: 'closed', closedAt: ago(31 * DAY) });
       expect(await lifecycle.purgeClosed(now)).toBe(1);

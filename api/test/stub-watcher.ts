@@ -43,6 +43,7 @@ export class StubWatcher {
   private readonly sweepResults = new Map<string, WatcherSweepResult>();
   private readonly registered = new Map<string, string>(); // tab_id -> ufvk
   private delayMs = 0;
+  private readonly hooks = new Map<StubRoute, () => Promise<void>>();
   private authToken: string | undefined;
   private healthFacts: WatcherHealth = {
     tip_height: 100,
@@ -80,6 +81,7 @@ export class StubWatcher {
     this.sweepResults.clear();
     this.registered.clear();
     this.delayMs = 0;
+    this.hooks.clear();
     this.authToken = undefined;
   }
 
@@ -137,6 +139,11 @@ export class StubWatcher {
     this.registered.set(tabId, '\0conflicting-ufvk');
   }
 
+  /** Run `fn` (once) when the next request to `route` arrives, before it is answered. */
+  onNext(route: StubRoute, fn: () => Promise<void>): void {
+    this.hooks.set(route, fn);
+  }
+
   callsTo(route: StubRoute): StubCall[] {
     return this.calls.filter((c) => c.route === route);
   }
@@ -190,6 +197,12 @@ export class StubWatcher {
 
     if (this.delayMs > 0) {
       await new Promise((r) => setTimeout(r, this.delayMs));
+    }
+
+    const hook = this.hooks.get(route);
+    if (hook) {
+      this.hooks.delete(route);
+      await hook();
     }
 
     const failure = this.failures.get(route)?.shift();

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ApiError } from '../common/api-error.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -17,7 +17,7 @@ const BATCH_SIZE = 100;
  * Logs carry counts only, never tab ids.
  */
 @Injectable()
-export class LifecycleService {
+export class LifecycleService implements OnModuleInit {
   private readonly logger = new Logger(LifecycleService.name);
 
   constructor(
@@ -25,12 +25,18 @@ export class LifecycleService {
     private readonly watcher: WatcherClient,
   ) {}
 
+  onModuleInit(): void {
+    if (process.env.ZTAB_DISABLE_CRON === '1') {
+      this.logger.warn('lifecycle cron disabled (ZTAB_DISABLE_CRON=1)');
+    }
+  }
+
   @Cron(CronExpression.EVERY_HOUR)
   async archiveIdleJob(): Promise<void> {
     try {
       await this.archiveIdle(new Date());
-    } catch {
-      this.logger.error('archive run failed');
+    } catch (err) {
+      this.logger.error(`archive run failed: ${errorLabel(err)}`);
     }
   }
 
@@ -38,8 +44,8 @@ export class LifecycleService {
   async purgeClosedJob(): Promise<void> {
     try {
       await this.purgeClosed(new Date());
-    } catch {
-      this.logger.error('purge run failed');
+    } catch (err) {
+      this.logger.error(`purge run failed: ${errorLabel(err)}`);
     }
   }
 
@@ -67,7 +73,7 @@ export class LifecycleService {
       if (batch.length === 0) break;
       cursor = batch[batch.length - 1].id;
       for (const { id } of batch) {
-        if (await this.archiveOne(id, cutoff)) archived++;
+        if (await this.archiveOne(id, cutoff, now)) archived++;
       }
       if (batch.length < batchSize) break;
     }
@@ -75,7 +81,38 @@ export class LifecycleService {
     return archived;
   }
 
-  private async archiveOne(id: string, cutoff: Date): Promise<boolean> {
+  private async archiveOne(id: string, cutoff: Date, now: Date): Promise<boolean> {
+    // The cached state can be stale for idle tabs: ask the watcher first.
+    let state: string | undefined;
+    try {
+      state = (await this.watcher.getTab(id)).state;
+    } catch (err) {
+      // 404: the watcher lost the tab, nothing to watch. Otherwise skip.
+      if (!(err instanceof ApiError && err.status === 404)) return false;
+    }
+    if (state !== undefined && state !== 'open') {
+      await this.prisma.tab.updateMany({
+        where: { id },
+        data: {
+          lastKnownState: state,
+          lastKnownAt: now,
+        },
+      });
+      if (state === 'closed') {
+        await this.prisma.tab.updateMany({
+          where: { id, closedAt: null },
+          data: { closedAt: now },
+        });
+      }
+      return false;
+    }
+    if (state === undefined) {
+      const { count } = await this.prisma.tab.updateMany({
+        where: { id, paused: false, lastAccessAt: { lt: cutoff } },
+        data: { paused: true },
+      });
+      return count === 1;
+    }
     try {
       await this.watcher.setActive(id, false);
     } catch (err) {
@@ -121,4 +158,9 @@ export class LifecycleService {
     this.logger.log(`purged ${purged}`);
     return purged;
   }
+}
+
+function errorLabel(err: unknown): string {
+  if (err instanceof ApiError) return `ApiError ${err.code}`;
+  return err instanceof Error ? err.name : 'unknown error';
 }
