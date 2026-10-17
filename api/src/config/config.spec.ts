@@ -12,6 +12,27 @@ describe('loadConfig', () => {
     expect(cfg.network).toBe('test');
     expect(cfg.databaseUrl).toBe(base.DATABASE_URL);
     expect(cfg.watcherToken).toBe('secret');
+    expect(cfg.rateLimitCreatePerHour).toBe(10);
+    expect(cfg.rateLimitDefaultPerMinute).toBe(120);
+  });
+
+  it('reads the rate limits', () => {
+    const cfg = loadConfig({
+      ...base,
+      RATE_LIMIT_CREATE_PER_HOUR: '3',
+      RATE_LIMIT_DEFAULT_PER_MINUTE: '7',
+    });
+    expect(cfg.rateLimitCreatePerHour).toBe(3);
+    expect(cfg.rateLimitDefaultPerMinute).toBe(7);
+  });
+
+  it.each(['0', '-1', '1.5', 'abc', ''])('throws on rate limit value %j', (bad) => {
+    expect(() => loadConfig({ ...base, RATE_LIMIT_CREATE_PER_HOUR: bad })).toThrow(
+      /RATE_LIMIT_CREATE_PER_HOUR/,
+    );
+    expect(() => loadConfig({ ...base, RATE_LIMIT_DEFAULT_PER_MINUTE: bad })).toThrow(
+      /RATE_LIMIT_DEFAULT_PER_MINUTE/,
+    );
   });
 
   it('reads explicit values', () => {

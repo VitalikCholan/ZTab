@@ -19,8 +19,15 @@ export const ERROR_CODE_LOCAL = 'errorCode';
  */
 export function requestLogger(
   sink: (line: RequestLogLine) => void = defaultSink,
+  warn: (message: string) => void = defaultWarn,
 ) {
+  let warned = false;
   return (req: Request, res: Response, next: NextFunction): void => {
+    // Spec §12: without a proxy header, rate limits key on the socket address.
+    if (!warned && req.headers['x-forwarded-for'] === undefined) {
+      warned = true;
+      warn(MISSING_XFF_WARNING);
+    }
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const code = res.locals[ERROR_CODE_LOCAL] as string | undefined;
@@ -36,7 +43,13 @@ export function requestLogger(
   };
 }
 
+export const MISSING_XFF_WARNING =
+  'X-Forwarded-For missing: rate limits key on the socket address; run behind exactly one reverse proxy';
+
 const logger = new Logger('Http');
+function defaultWarn(message: string): void {
+  logger.warn(message);
+}
 function defaultSink(line: RequestLogLine): void {
   logger.log(JSON.stringify(line));
 }

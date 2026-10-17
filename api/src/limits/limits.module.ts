@@ -1,10 +1,11 @@
 import { Global, Module, type ExecutionContext } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { CONFIG, type Config } from '../config/config.js';
 import { ThrottlerGuard, ThrottlerModule } from './throttler.js';
 import {
-  DEFAULT_LIMITS,
   LIMITS_OPTIONS,
   budgetKey,
+  limitsFromConfig,
   usesCreateBudget,
   trackerOf,
   type LimitsOptions,
@@ -13,7 +14,13 @@ import {
 /** Holds the limits so tests can override them through LIMITS_OPTIONS. */
 @Global()
 @Module({
-  providers: [{ provide: LIMITS_OPTIONS, useValue: DEFAULT_LIMITS }],
+  providers: [
+    {
+      provide: LIMITS_OPTIONS,
+      inject: [CONFIG],
+      useFactory: (config: Config): LimitsOptions => limitsFromConfig(config),
+    },
+  ],
   exports: [LIMITS_OPTIONS],
 })
 class LimitsConfigModule {}

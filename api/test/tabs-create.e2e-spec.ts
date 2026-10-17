@@ -343,4 +343,23 @@ describe('PUT /tabs/:id', () => {
       ).rejects.toThrow();
     });
   });
+
+  it.each([
+    ['too few', (b: { participants_count: number; tab_id: string }) =>
+      [{ index: 0, address: `utest1x${b.tab_id}` }]],
+    ['duplicate index', (b: { participants_count: number; tab_id: string }) =>
+      Array.from({ length: b.participants_count }, () => ({ index: 0, address: 'utest1a' }))],
+    ['index out of range', (b: { participants_count: number; tab_id: string }) =>
+      Array.from({ length: b.participants_count }, (_, i) => ({ index: i + 1, address: 'utest1a' }))],
+    ['wrong network prefix', (b: { participants_count: number; tab_id: string }) =>
+      Array.from({ length: b.participants_count }, (_, i) => ({ index: i, address: 'u1main' }))],
+    ['empty address', (b: { participants_count: number; tab_id: string }) =>
+      Array.from({ length: b.participants_count }, (_, i) => ({ index: i, address: '' }))],
+  ])('503 watcher_unavailable and nothing stored for watcher addresses: %s', async (_n, fn) => {
+    stub.setRegisterAddresses(fn);
+    const res = await put(randomUUID(), groupBody());
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe('watcher_unavailable');
+    expect(await counts()).toEqual({ tabs: 0, addresses: 0, blobs: 0, tokens: 0 });
+  });
 });

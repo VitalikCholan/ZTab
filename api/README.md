@@ -38,6 +38,8 @@ The entrypoint runs `prisma migrate deploy`, then `node dist/src/main.js` as the
 | `ZTAB_NETWORK` | no | `test` | `test` or `main`; selects the accepted UFVK prefix (`uviewtest` / `uview1`) |
 | `CORS_ORIGIN` | no | `http://localhost:5173` | Allowed browser origin |
 | `PORT` | no | `3000` | Listen port |
+| `RATE_LIMIT_CREATE_PER_HOUR` | no | `10` | `PUT /tabs` budget per client IP per hour (positive integer) |
+| `RATE_LIMIT_DEFAULT_PER_MINUTE` | no | `120` | Budget for every other route per client IP per minute (positive integer) |
 | `ZTAB_DISABLE_CRON` | no | unset | Tests only: disables the archive and purge cron jobs. Never set it in production |
 
 ## Endpoints
@@ -72,7 +74,7 @@ Logs carry only method, path, status, duration and error code. Request and respo
 
 ## Polling
 
-There is no push. The PWA polls `GET /tabs/:id` (every 10 s, 5 s on the participant screen after paying). The API calls the watcher on demand and caches its tab snapshot for 5 s in process memory; sweep and broadcast invalidate that cache. Rate limits are 10 `PUT /tabs` per hour and 120 other requests per minute, per client IP, with exactly one proxy in front (the IP comes from `X-Forwarded-For`).
+There is no push. The PWA polls `GET /tabs/:id` (every 10 s, 5 s on the participant screen after paying). The API calls the watcher on demand and caches its tab snapshot for 5 s in process memory; sweep and broadcast invalidate that cache. Rate limits default to 10 `PUT /tabs` per hour and 120 other requests per minute (`RATE_LIMIT_CREATE_PER_HOUR`, `RATE_LIMIT_DEFAULT_PER_MINUTE`), per client IP, with exactly one proxy in front (the IP comes from `X-Forwarded-For`; the API logs a one-time warning when the header is missing).
 
 ## Contract notes for the PWA
 
@@ -80,7 +82,12 @@ Behaviour fixed during implementation, beyond the spec text:
 
 - Unexpected server errors return 500 with error code `internal` (no details).
 - Watcher 401 or 403 (the API's own `WATCHER_TOKEN` is wrong) is reported as `503 watcher_unavailable`, not passed through.
-- In `GET /tabs/:id`, `status_facts: null` means unknown (watcher unreachable or no data), not "nothing paid".
-- Retrying `PUT /tabs/:id` (same `ufvk`, same admin hash) requires the admin Bearer token; without a valid one the retry gets `409 conflict`.
+- In `GET /tabs/:id`, `status_facts: null` means unknown (no watcher data for that index), not "nothing paid".
+- `stale` is `true` when the watcher is unreachable or when the watcher itself reports `stale` (it then serves its last known facts, and `synced_height`/`tip_height` are present).
+- A participant link's view also carries `participant_index`.
+- `recipient_address` must start with the network's unified-address prefix (`utest1` on `test`, `u1` on `main`), at most 512 characters. `pczt_b64` is 256 to 49152 characters of base64url or standard base64. Anything shorter or differently shaped (for example a 43-character secret) is `400 validation`.
+- If the watcher returns addresses that do not match the request (count, indexes, network prefix), `PUT` answers `503 watcher_unavailable` and stores nothing.
+- A `GET` that finds the watcher inactive while the tab is not paused re-activates it (best effort, never fails the read).
+- Retrying `PUT /tabs/:id` (row exists) requires `Authorization: Bearer <admin token>` and an identical token-hash set (and same `ufvk`, mode, count, birthday); otherwise `409 conflict`.
 - Rate limits are per client IP and assume one trusted proxy hop.
 - `ZTAB_DISABLE_CRON` exists for tests only.

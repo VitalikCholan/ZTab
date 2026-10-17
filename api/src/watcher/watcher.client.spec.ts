@@ -23,6 +23,8 @@ describe('WatcherClient', () => {
     network: 'test',
     corsOrigin: 'x',
     port: 0,
+    rateLimitCreatePerHour: 10,
+    rateLimitDefaultPerMinute: 120,
   });
 
   beforeAll(async () => {

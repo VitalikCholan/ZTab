@@ -243,4 +243,24 @@ describe('GET /tabs/:id', () => {
     await get(admin).expect(200);
     expect((await row()).closedAt!.getTime()).toBe(first.closedAt!.getTime());
   });
+
+  it('serves the watcher\'s own stale flag with heights present', async () => {
+    stub.setTab(id, { stale: true, synced_height: 80, tip_height: 99 });
+    const res = await get(admin).expect(200);
+    expect(res.body).toMatchObject({ stale: true, synced_height: 80, tip_height: 99 });
+  });
+
+  it('self-heals: watcher inactive while the row is unpaused re-activates it', async () => {
+    stub.setTab(id, { active: false });
+    await get(admin).expect(200);
+    expect(stub.callsTo('setActive')).toHaveLength(1);
+    expect(stub.callsTo('setActive')[0].body).toEqual({ active: true });
+    expect((await row()).paused).toBe(false);
+  });
+
+  it('a failing self-heal never fails the GET', async () => {
+    stub.setTab(id, { active: false });
+    stub.failNext('setActive', 500);
+    await get(admin).expect(200);
+  });
 });

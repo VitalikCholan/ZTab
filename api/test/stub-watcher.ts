@@ -42,6 +42,9 @@ export class StubWatcher {
   private readonly sweepStatuses = new Map<string, WatcherSweepStatus>();
   private readonly sweepResults = new Map<string, WatcherSweepResult>();
   private readonly registered = new Map<string, string>(); // tab_id -> ufvk
+  private registerAddresses:
+    | ((b: { tab_id: string; participants_count: number }) => { index: number; address: string }[])
+    | undefined;
   private delayMs = 0;
   private readonly hooks = new Map<StubRoute, () => Promise<void>>();
   private authToken: string | undefined;
@@ -81,6 +84,7 @@ export class StubWatcher {
     this.sweepResults.clear();
     this.registered.clear();
     this.delayMs = 0;
+    this.registerAddresses = undefined;
     this.hooks.clear();
     this.authToken = undefined;
   }
@@ -137,6 +141,11 @@ export class StubWatcher {
    */
   setRegisterConflict(tabId: string): void {
     this.registered.set(tabId, '\0conflicting-ufvk');
+  }
+
+  /** Override the addresses answered to the next registrations (until reset). */
+  setRegisterAddresses(fn: NonNullable<StubWatcher['registerAddresses']>): void {
+    this.registerAddresses = fn;
   }
 
   /** Run `fn` (once) when the next request to `route` arrives, before it is answered. */
@@ -234,10 +243,12 @@ export class StubWatcher {
           return;
         }
         this.registered.set(b.tab_id, b.ufvk);
-        const addresses = Array.from(
-          { length: b.participants_count },
-          (_, i) => ({ index: i, address: `utest1stub${b.tab_id}x${i}` }),
-        );
+        const addresses =
+          this.registerAddresses?.(b) ??
+          Array.from({ length: b.participants_count }, (_, i) => ({
+            index: i,
+            address: `utest1stub${b.tab_id}x${i}`,
+          }));
         if (!this.tabs.has(b.tab_id)) {
           this.setTab(b.tab_id, {
             participants: addresses.map((a) => ({

@@ -62,7 +62,7 @@ export class LifecycleService implements OnModuleInit {
       const batch = await this.prisma.tab.findMany({
         where: {
           paused: false,
-          lastKnownState: 'open',
+          lastKnownState: { in: ['open', 'sweeping'] },
           lastAccessAt: { lt: cutoff },
           ...(cursor ? { id: { gt: cursor } } : {}),
         },

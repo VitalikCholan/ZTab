@@ -74,6 +74,11 @@ describe('buildTabView', () => {
     expect(v.participants.map((p) => p.address)).toEqual(['addr0', 'addr1']);
   });
 
+  it('keeps the watcher\'s own stale flag and its heights', () => {
+    const v = buildTabView(tab, addresses, blob, { kind: 'admin' }, { ...watcher, stale: true });
+    expect(v).toMatchObject({ stale: true, synced_height: 90, tip_height: 100 });
+  });
+
   it('watcher missing an index: that index is null, others real', () => {
     const partial = { ...watcher, participants: [watcher.participants[0]] };
     const v = buildTabView(tab, addresses, blob, { kind: 'admin' }, partial);

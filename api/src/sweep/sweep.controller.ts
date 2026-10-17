@@ -10,10 +10,10 @@ import {
 import { Roles } from '../auth/role.decorator.js';
 import { TabAuthGuard, type TabAuthRequest } from '../auth/tab-auth.guard.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
+import { SweepBodyPipe } from './sweep-body.pipe.js';
 import { SweepService } from './sweep.service.js';
 import {
   broadcastBodySchema,
-  sweepBodySchema,
   type BroadcastBody,
   type SweepBody,
 } from './sweep.schemas.js';
@@ -29,7 +29,7 @@ export class SweepController {
   @HttpCode(200)
   sweep(
     @Req() req: TabAuthRequest,
-    @Body(new ZodValidationPipe(sweepBodySchema)) body: SweepBody,
+    @Body(SweepBodyPipe) body: SweepBody,
   ) {
     return this.sweeps.sweep(req.tabAuth.tab, body);
   }

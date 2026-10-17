@@ -90,7 +90,7 @@ export function buildTabView(
     mode: tab.mode,
     participants_count: tab.participantsCount,
     state: tab.paused ? 'abandoned' : (watcher?.state ?? tab.lastKnownState),
-    stale: watcher === null,
+    stale: watcher === null || watcher.stale === true,
     role: role.kind,
     blob: Buffer.from(blob).toString('base64'),
     participants,

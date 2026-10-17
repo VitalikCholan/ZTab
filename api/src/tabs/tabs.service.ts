@@ -88,7 +88,7 @@ export class TabsService {
       birthday: input.birthday,
       participants_count: input.participants_count,
     });
-    const addresses = [...registered.addresses].sort((a, b) => a.index - b.index);
+    const addresses = this.checkedAddresses(registered, input.participants_count);
 
     try {
       // A nested create is a single transaction: tab, addresses, blobs, tokens.
@@ -127,6 +127,41 @@ export class TabsService {
   }
 
   /**
+   * The watcher's answer is untrusted input to our database: exactly one
+   * address per participant, indexes 0..n-1, each a unified address of this
+   * network. Anything else is a watcher fault (503), and nothing is stored.
+   */
+  private checkedAddresses(
+    registered: unknown,
+    count: number,
+  ): { index: number; address: string }[] {
+    const bad = () =>
+      new ApiError(503, 'watcher_unavailable', 'watcher returned invalid addresses');
+    const list = (registered as { addresses?: unknown } | null)?.addresses;
+    if (!Array.isArray(list) || list.length !== count) throw bad();
+    const prefix = this.config.network === 'main' ? 'u1' : 'utest1';
+    const out: { index: number; address: string }[] = [];
+    const seen = new Set<number>();
+    for (const item of list as { index?: unknown; address?: unknown }[]) {
+      const { index, address } = item ?? {};
+      if (
+        typeof index !== 'number' ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= count ||
+        seen.has(index) ||
+        typeof address !== 'string' ||
+        !address.startsWith(prefix)
+      ) {
+        throw bad();
+      }
+      seen.add(index);
+      out.push({ index, address });
+    }
+    return out.sort((a, b) => a.index - b.index);
+  }
+
+  /**
    * A repeated PUT (e.g. after a dropped response). Only an identical
    * registration is accepted: same ufvk, mode, count, birthday and exactly the
    * stored token hashes. Token hashes are never changed here, because
@@ -162,17 +197,25 @@ export class TabsService {
       throw new ApiError(409, 'conflict', 'tab already exists with different parameters');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.tabBlob.deleteMany({ where: { tabId: existing.id } }),
-      this.prisma.tabBlob.createMany({
-        data: blobs.map((b) => ({
-          tabId: existing.id,
-          role: b.role,
-          index: b.index,
-          ciphertext: Buffer.from(b.value, 'base64'),
-        })),
-      }),
-    ]);
+    try {
+      await this.prisma.$transaction([
+        this.prisma.tabBlob.deleteMany({ where: { tabId: existing.id } }),
+        this.prisma.tabBlob.createMany({
+          data: blobs.map((b) => ({
+            tabId: existing.id,
+            role: b.role,
+            index: b.index,
+            ciphertext: Buffer.from(b.value, 'base64'),
+          })),
+        }),
+      ]);
+    } catch (e) {
+      // A concurrent retry can collide on the blob unique key.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ApiError(409, 'conflict', 'tab or token already exists');
+      }
+      throw e;
+    }
     const addresses = existing.addresses
       .map(({ index, address }) => ({ index, address }))
       .sort((a, b) => a.index - b.index);
@@ -195,6 +238,7 @@ export class TabsService {
         const got = await this.watcher.getTab(id);
         // A malformed answer counts as no data rather than a 500.
         watcher = Array.isArray(got?.participants) ? got : null;
+        if (watcher && watcher.active === false && !tab.paused) await this.heal(id);
       } catch (e) {
         if (!isStaleCause(e)) throw e;
         this.logger.warn(`watcher snapshot unavailable: ${(e as ApiError).code}`);
@@ -227,6 +271,17 @@ export class TabsService {
       role,
       watcher,
     );
+  }
+
+  /** The row says unpaused but the watcher has the tab inactive: re-activate, best effort. */
+  private async heal(id: string): Promise<void> {
+    try {
+      await this.watcher.setActive(id, true);
+    } catch (e) {
+      this.logger.warn(
+        `self-heal failed: ${e instanceof ApiError ? e.code : 'unknown error'}`,
+      );
+    }
   }
 
   /**

@@ -21,6 +21,17 @@ export const DEFAULT_LIMITS: LimitsOptions = {
   default: { limit: 120, ttlMs: 60_000 },
 };
 
+/** Limits from the environment (RATE_LIMIT_*); defaults equal DEFAULT_LIMITS. */
+export function limitsFromConfig(config: {
+  rateLimitCreatePerHour: number;
+  rateLimitDefaultPerMinute: number;
+}): LimitsOptions {
+  return {
+    create: { limit: config.rateLimitCreatePerHour, ttlMs: 3_600_000 },
+    default: { limit: config.rateLimitDefaultPerMinute, ttlMs: 60_000 },
+  };
+}
+
 const CREATE_BUDGET = 'ztab:create-budget';
 
 /**

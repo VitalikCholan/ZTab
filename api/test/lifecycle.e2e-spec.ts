@@ -94,8 +94,9 @@ describe('lifecycle', () => {
       expect(stub.callsTo('setActive')).toHaveLength(0);
     });
 
-    it('leaves sweeping tabs', async () => {
+    it('leaves tabs the watcher still reports as sweeping', async () => {
       const id = await seed({ lastAccessAt: ago(8 * DAY), lastKnownState: 'sweeping' });
+      stub.setTab(id, { state: 'sweeping' });
       expect(await lifecycle.archiveIdle(now)).toBe(0);
       expect(await paused(id)).toBe(false);
     });
@@ -151,6 +152,16 @@ describe('lifecycle', () => {
       expect(tab.lastKnownState).toBe('sweeping');
       expect(tab.lastKnownAt).toEqual(now);
       expect(stub.callsTo('setActive')).toHaveLength(0);
+    });
+
+    it('re-checks a cached sweeping tab that is really closed', async () => {
+      const id = await seed({ lastAccessAt: ago(8 * DAY), lastKnownState: 'sweeping' });
+      stub.setTab(id, { state: 'closed' });
+      expect(await lifecycle.archiveIdle(now)).toBe(0);
+      const tab = await prisma.tab.findUniqueOrThrow({ where: { id } });
+      expect(tab.paused).toBe(false);
+      expect(tab.lastKnownState).toBe('closed');
+      expect(tab.closedAt).toEqual(now);
     });
 
     it('records closed tabs with closed_at so purge removes them later', async () => {

@@ -9,6 +9,8 @@ export interface Config {
   network: 'test' | 'main';
   corsOrigin: string;
   port: number;
+  rateLimitCreatePerHour: number;
+  rateLimitDefaultPerMinute: number;
 }
 
 const schema = z.object({
@@ -18,6 +20,8 @@ const schema = z.object({
   ZTAB_NETWORK: z.enum(['test', 'main']).default('test'),
   CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  RATE_LIMIT_CREATE_PER_HOUR: z.coerce.number().int().min(1).default(10),
+  RATE_LIMIT_DEFAULT_PER_MINUTE: z.coerce.number().int().min(1).default(120),
 });
 
 /** Parses and validates the environment; throws naming the offending variables. */
@@ -37,5 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     network: v.ZTAB_NETWORK,
     corsOrigin: v.CORS_ORIGIN,
     port: v.PORT,
+    rateLimitCreatePerHour: v.RATE_LIMIT_CREATE_PER_HOUR,
+    rateLimitDefaultPerMinute: v.RATE_LIMIT_DEFAULT_PER_MINUTE,
   };
 }

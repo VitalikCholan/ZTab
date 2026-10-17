@@ -15,6 +15,7 @@ const bearer = (t: Buffer) => `Bearer ${t.toString('base64url')}`;
 const PCZT_B64 = readFileSync(
   new URL('../../watcher/tests/fixtures/sweep.proved.pczt', import.meta.url),
 ).toString('base64url');
+const SECRET = randomBytes(32).toString('base64url');
 const SUMMARY = {
   inputs_zat: 100000,
   output_zat: 90000,
@@ -181,7 +182,11 @@ describe('sweep proxy', () => {
 
   it('rejects invalid bodies with 400 validation', async () => {
     const bad: [string, unknown][] = [
-      ['sweep', { recipient_address: 'x'.repeat(513) }],
+      ['sweep', { recipient_address: 'utest1' + 'x'.repeat(507) }],
+      ['sweep', { recipient_address: 'u1' + 'x'.repeat(60) }],
+      ['sweep', { recipient_address: SECRET }],
+      ['broadcast', { pczt_b64: SECRET }],
+      ['broadcast', { pczt_b64: 'A'.repeat(255) }],
       ['sweep', {}],
       ['sweep', { recipient_address: 'a', extra: 1 }],
       ['sweep', { recipient_address: 5 }],
@@ -200,8 +205,14 @@ describe('sweep proxy', () => {
   });
 
   it('accepts the largest allowed values', async () => {
-    await sweep(admin, { recipient_address: 'x'.repeat(512) }).expect(200);
+    await sweep(admin, { recipient_address: 'utest1' + 'x'.repeat(506) }).expect(200);
     await broadcast(admin, { pczt_b64: 'A'.repeat(49152) }).expect(200);
+  });
+
+  it('accepts a standard-base64 PCZT and forwards it unchanged', async () => {
+    const std = 'A+/'.repeat(100) + 'AA';
+    await broadcast(admin, { pczt_b64: std }).expect(200);
+    expect(stub.callsTo('broadcast')[0].body).toEqual({ pczt_b64: std });
   });
 
   it('revives a paused tab before forwarding', async () => {
