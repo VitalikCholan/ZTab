@@ -62,6 +62,9 @@ model TabBlob {
   ciphertext Bytes
   tab        Tab      @relation(fields: [tabId], references: [id], onDelete: Cascade)
 
+  // The database index is UNIQUE NULLS NOT DISTINCT (see migration
+  // null_index_unique): admin and group rows have a NULL index and must still
+  // be unique per tab. The @@unique here only gives the client the compound key.
   @@unique([tabId, role, index])
   @@map("tab_blobs")
 }
@@ -74,5 +77,7 @@ model TabToken {
   tokenHash Bytes    @unique @map("token_hash")
   tab       Tab      @relation(fields: [tabId], references: [id], onDelete: Cascade)
 
+  // NULLS NOT DISTINCT in the database, like tab_blobs above.
+  @@unique([tabId, role, index])
   @@map("tab_tokens")
 }
