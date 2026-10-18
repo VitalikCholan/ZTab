@@ -244,3 +244,106 @@ async fn balance_reflects_unspent_notes_and_confirmations() {
     assert_eq!(tab["balance"]["spendable_zat"], 0);
     assert_eq!(tab["balance"]["min_unspent_confirmations"], 0);
 }
+
+#[tokio::test]
+async fn a_spend_by_an_expired_unmined_transaction_gives_the_note_back() {
+    use zcash_primitives::transaction::Transaction;
+    use zcash_protocol::consensus::{BlockHeight, BranchId};
+    let state = common::offline_state().await;
+    common::import_fixture_tab_offline(&state, 2).await;
+    let network = state.wallet.network();
+    // The self-send is mined (two notes of the account); the funding transaction stands in
+    // for a stored, unmined sweep (expiry height 4503834).
+    for (txid, mined) in [
+        (common::FIXTURE_INDEX1_SELF_SEND_TXID, Some(4_503_710)),
+        (common::FIXTURE_FUNDING_TXID, None),
+    ] {
+        let tx = Transaction::read(
+            &common::fixture_rawtx(txid)[..],
+            BranchId::for_height(&network, BlockHeight::from_u32(4_503_718)),
+        )
+        .unwrap();
+        zcash_client_backend::data_api::wallet::decrypt_and_store_transaction(
+            &network,
+            &mut *state.wallet.db(),
+            &tx,
+            mined.map(BlockHeight::from_u32),
+        )
+        .unwrap();
+    }
+    // Record the spend as a scan of the sweep would: it spends the 0.1 TAZ note.
+    let expiry = {
+        let conn = rusqlite::Connection::open(state.cfg.data_dir.join("wallet.sqlite")).unwrap();
+        let (tx_id, expiry): (i64, i64) = conn
+            .query_row(
+                "SELECT id_tx, expiry_height FROM transactions WHERE mined_height IS NULL",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let n = conn
+            .execute(
+                "INSERT INTO ironwood_received_note_spends (ironwood_received_note_id, transaction_id)
+                 SELECT id, ?1 FROM ironwood_received_notes WHERE value = 10000000",
+                [tx_id],
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        expiry as u32
+    };
+    let tab = state
+        .meta
+        .get_tab(common::fixture_tab_id())
+        .unwrap()
+        .unwrap();
+    let values = |tip: u32| {
+        let mut v: Vec<u64> =
+            ztab_watcher::facts::unspent_notes(&state.wallet, tab.account_uuid, tip)
+                .unwrap()
+                .iter()
+                .map(|n| n.value_zat)
+                .collect();
+        v.sort();
+        v
+    };
+    // Unexpired and unmined (it can still be mined next block): its inputs stay spent.
+    assert!(!values(expiry - 1).contains(&10_000_000));
+    // Expired without being mined (the tip reached its expiry height): the note is spendable again.
+    assert!(values(expiry).contains(&10_000_000));
+}
+
+#[tokio::test]
+async fn mempool_payments_are_pending_and_never_spendable() {
+    let state = common::offline_state().await;
+    common::import_fixture_tab_offline(&state, 2).await;
+    store_fixture_txs(&state);
+    let id = common::fixture_tab_id();
+    let tip = 4_503_742 + 4;
+    state
+        .health
+        .tip_height
+        .store(tip, std::sync::atomic::Ordering::Relaxed);
+    let uri = format!("/v1/tabs/{id}");
+    let (_, before) = call(&state, "GET", &uri, true, None).await;
+    state
+        .meta
+        .upsert_sighting(
+            &ztab_watcher::meta::Sighting {
+                txid: "ab".repeat(32),
+                participant_index: 1,
+                value_zat: 7_000,
+                first_seen_at: ztab_watcher::meta::rfc3339(time::OffsetDateTime::now_utc())
+                    .unwrap(),
+            },
+            id,
+        )
+        .unwrap();
+    let (_, after) = call(&state, "GET", &uri, true, None).await;
+    let n = |v: &serde_json::Value, k: &str| v["balance"][k].as_u64().unwrap();
+    assert_eq!(n(&after, "pending_zat"), n(&before, "pending_zat") + 7_000);
+    assert_eq!(n(&after, "spendable_zat"), n(&before, "spendable_zat"));
+    assert_eq!(
+        after["balance"]["min_unspent_confirmations"],
+        before["balance"]["min_unspent_confirmations"]
+    );
+}

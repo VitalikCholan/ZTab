@@ -221,11 +221,15 @@ pub fn note_rows(wallet: &WalletStore, account_uuid: Uuid) -> Result<Vec<NoteRow
         .collect()
 }
 
-/// The tab's unspent notes: those without a row in the pool's `*_received_note_spends`
-/// (a spend by a transaction the wallet holds, mined or not, makes a note spent).
+/// The tab's unspent notes: those without a spend row (`*_received_note_spends`, through
+/// `v_received_output_spends`) by a live transaction. Like `zcash_client_sqlite`, a spend
+/// counts only if its transaction is mined, never expires (`expiry_height = 0`), has an
+/// unknown expiry, or has not expired yet at `tip`; a spending transaction that expired
+/// unmined gives its notes back.
 pub fn unspent_notes(
     wallet: &WalletStore,
     account_uuid: Uuid,
+    tip: u32,
 ) -> Result<Vec<UnspentNote>, WatcherError> {
     let conn = wallet.read_conn();
     let mut st = conn
@@ -234,15 +238,20 @@ pub fn unspent_notes(
                FROM v_received_outputs r
                JOIN accounts acc ON acc.id = r.account_id
                JOIN transactions t ON t.id_tx = r.transaction_id
-          LEFT JOIN v_received_output_spends s
-                 ON s.pool = r.pool AND s.received_output_id = r.id_within_pool_table
-              WHERE acc.uuid = ?1 AND r.pool IN (3, 4) AND s.received_output_id IS NULL",
+              WHERE acc.uuid = ?1 AND r.pool IN (3, 4)
+                AND NOT EXISTS (
+                    SELECT 1 FROM v_received_output_spends s
+                      JOIN transactions stx ON stx.id_tx = s.transaction_id
+                     WHERE s.pool = r.pool AND s.received_output_id = r.id_within_pool_table
+                       AND (stx.mined_height IS NOT NULL OR stx.expiry_height IS NULL
+                            OR stx.expiry_height = 0 OR stx.expiry_height > ?2))",
         )
         .map_err(werr)?;
     let raw: Vec<(i64, Option<i64>)> = st
-        .query_map([account_uuid.as_bytes().to_vec()], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_map(
+            rusqlite::params![account_uuid.as_bytes().to_vec(), tip],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(werr)?
         .collect::<Result<_, _>>()
         .map_err(werr)?;
@@ -260,11 +269,13 @@ pub fn unspent_notes(
 /// confirmations, like payments.
 pub fn balance_of(
     notes: &[UnspentNote],
+    mempool_zat: u64,
     swept_zat: u64,
     tip: u32,
     confirmations_sweep: u32,
 ) -> TabBalance {
     let mut b = TabBalance {
+        pending_zat: mempool_zat,
         swept_zat,
         ..Default::default()
     };
@@ -288,13 +299,14 @@ pub fn balance_of(
     b
 }
 
-/// [`balance_of`] over the account's unspent notes and the tab's mined sweeps.
+/// [`balance_of`] over the account's unspent notes, the tab's fresh unmined mempool
+/// payments and its mined sweeps.
 pub fn tab_balance(
     wallet: &WalletStore,
     meta: &MetaStore,
+    cfg: &Config,
     tab: &TabRow,
     tip: u32,
-    confirmations_sweep: u32,
 ) -> Result<TabBalance, WatcherError> {
     let swept = meta
         .sweep_history(tab.tab_id)?
@@ -302,8 +314,27 @@ pub fn tab_balance(
         .filter(|h| h.mined_height.is_some())
         .map(|h| h.output_zat)
         .sum();
-    let notes = unspent_notes(wallet, tab.account_uuid)?;
-    Ok(balance_of(&notes, swept, tip, confirmations_sweep))
+    let notes = unspent_notes(wallet, tab.account_uuid, tip)?;
+    // Sightings of transactions the wallet already holds are counted through their notes.
+    let cutoff =
+        crate::meta::sighting_cutoff(time::OffsetDateTime::now_utc(), cfg.block_interval_seconds);
+    let sightings = fresh_sightings(meta.sightings_for_tab(tab.tab_id)?, cutoff)?;
+    let held: HashSet<String> = note_rows(wallet, tab.account_uuid)?
+        .into_iter()
+        .map(|n| n.txid)
+        .collect();
+    let mempool = sightings
+        .iter()
+        .filter(|s| !held.contains(&s.txid))
+        .map(|s| s.value_zat)
+        .sum();
+    Ok(balance_of(
+        &notes,
+        mempool,
+        swept,
+        tip,
+        cfg.confirmations_sweep,
+    ))
 }
 
 /// The tab's participant addresses from `ztab.sqlite`. Registration stores them; a tab
@@ -358,7 +389,7 @@ pub fn tab_facts(
         tip_height: tip,
         stale,
         participants,
-        balance: tab_balance(wallet, meta, tab, tip, cfg.confirmations_sweep)?,
+        balance: tab_balance(wallet, meta, cfg, tab, tip)?,
     })
 }
 

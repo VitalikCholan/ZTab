@@ -372,7 +372,7 @@ async fn sweep_status_lists_history_with_amounts() {
         serde_json::json!([])
     );
 
-    // Offered (amounts as the offer summary reports them) and broadcast, not mined.
+    // Offered (amounts as the offer summary reports them) not mined.
     let txid = common::FIXTURE_FUNDING_TXID;
     let mined = 4_503_718;
     state.meta.put_sweep(tab.tab_id, txid, mined + 40).unwrap();
@@ -380,8 +380,8 @@ async fn sweep_status_lists_history_with_amounts() {
         .meta
         .record_sweep_offer(tab.tab_id, txid, 59_980_000, 20_000)
         .unwrap();
-    state.meta.mark_broadcast(tab.tab_id, txid).unwrap();
-    state.meta.mark_sweep_broadcast(txid).unwrap();
+    // Not broadcast through the watcher (that needs lightwalletd): history lists nothing
+    // until the sweep is seen mined, which is how a signer-side broadcast shows up.
     state
         .meta
         .set_tab_state(tab.tab_id, TabState::Sweeping)
@@ -391,13 +391,9 @@ async fn sweep_status_lists_history_with_amounts() {
         .health
         .synced_height
         .store(mined + 2, Ordering::Relaxed);
-    let st = get(sweep_uri.clone()).await;
     assert_eq!(
-        st["history"],
-        serde_json::json!([{
-            "txid": txid, "output_zat": 59_980_000, "fee_zat": 20_000,
-            "mined_height": null, "confirmations": 0
-        }])
+        get(sweep_uri.clone()).await["history"],
+        serde_json::json!([])
     );
     assert_eq!(get(tab_uri.clone()).await["balance"]["swept_zat"], 0);
 
@@ -416,6 +412,10 @@ async fn sweep_status_lists_history_with_amounts() {
     )
     .unwrap();
     let st = get(sweep_uri).await;
+    // `advance` stamped the broadcast and the mined height on seeing the sweep mined.
+    assert_eq!(st["history"][0]["txid"], txid);
+    assert_eq!(st["history"][0]["output_zat"], 59_980_000);
+    assert_eq!(st["history"][0]["fee_zat"], 20_000);
     assert_eq!(st["history"][0]["mined_height"], mined);
     assert_eq!(st["history"][0]["confirmations"], 3);
     assert_eq!(st["history"].as_array().unwrap().len(), 1);
