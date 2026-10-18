@@ -135,18 +135,29 @@ export async function createTab(input: CreateInput, deps: CreateDeps): Promise<C
 
   // The first PUT carries no token. A lost response is not final: the row may exist, so the
   // retry re-sends the identical body with the admin Bearer (spec §5.1 Retry).
-  const send = async (retry: boolean): Promise<CreatedTab> => {
+  // Single-flight: concurrent retry() calls (a double click) share the one PUT in flight.
+  let inFlight: Promise<CreatedTab> | undefined;
+  const retry = (): Promise<CreatedTab> => {
+    inFlight ??= send(true).finally(() => {
+      inFlight = undefined;
+    });
+    return inFlight;
+  };
+  const send = async (isRetry: boolean): Promise<CreatedTab> => {
     if (done) throw new Error('create_finished');
     let result: CreateTabResult;
     try {
-      result = retry ? await api.retryCreate(tabId, body, keys.tokens.admin) : await api.createTab(tabId, body);
+      result = isRetry ? await api.retryCreate(tabId, body, keys.tokens.admin) : await api.createTab(tabId, body);
     } catch (e) {
+      if (done) throw new Error('create_finished');
       if (e instanceof ApiRequestError && e.code === 'network') {
-        throw new CreateNetworkError(e, tabId, () => send(true), destroy);
+        throw new CreateNetworkError(e, tabId, retry, destroy);
       }
       destroy();
       throw e;
     }
+    // abandon() may have run while the PUT was pending: the keys are zero, build nothing.
+    if (done) throw new Error('create_finished');
     return finish(result);
   };
   return send(false);

@@ -195,6 +195,62 @@ describe('createTab', () => {
     expect(puts).toHaveLength(1);
   });
 
+  it('abandon() while a retry PUT is pending → the retry rejects with create_finished and builds no links', async () => {
+    let master: Uint8Array | undefined;
+    let release: (() => void) | undefined;
+    const putsSeen: number[] = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/status')) return json(200, { tip_height: 1000 });
+      const body = JSON.parse(init.body as string) as CreateTabBody;
+      putsSeen.push(putsSeen.length + 1);
+      if (putsSeen.length === 1) throw new TypeError('Failed to fetch');
+      await new Promise<void>((r) => (release = r));
+      return honest(body, 200);
+    });
+    const api = new ApiClient('https://api.example', fetchImpl as unknown as typeof fetch);
+    const deps = { api, network: 'test' as const, now: () => NOW, origin: ORIGIN, createMaster: () => (master = createMaster()) };
+    const err = (await createTab(input('individual'), deps).catch((x: unknown) => x)) as CreateNetworkError;
+    const pending = err.retry();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    err.abandon();
+    release!();
+    await expect(pending).rejects.toThrow('create_finished');
+    expect(master!.every((b) => b === 0)).toBe(true);
+    expect(putsSeen).toHaveLength(2);
+  });
+
+  it('two retry() calls at once share one PUT and resolve to the same result', async () => {
+    let release: (() => void) | undefined;
+    let n = 0;
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/status')) return json(200, { tip_height: 1000 });
+      const body = JSON.parse(init.body as string) as CreateTabBody;
+      n += 1;
+      if (n === 1) throw new TypeError('Failed to fetch');
+      await new Promise<void>((r) => (release = r));
+      return honest(body, 200);
+    });
+    const api = new ApiClient('https://api.example', fetchImpl as unknown as typeof fetch);
+    const err = (await createTab(input('individual'), { api, network: 'test', now: () => NOW, origin: ORIGIN }).catch(
+      (x: unknown) => x,
+    )) as CreateNetworkError;
+    const a = err.retry();
+    const b = err.retry();
+    expect(b).toBe(a);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    release!();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(rb).toBe(ra);
+    expect(n).toBe(2);
+    // The links were built from live keys, not zeroed ones.
+    const admin = parseFragment(new URL(ra.adminUrl).hash);
+    expect(keyOf(admin).some((x) => x !== 0)).toBe(true);
+    for (const link of ra.participantLinks) {
+      expect(keyOf(parseFragment(new URL(link.url).hash)).some((x) => x !== 0)).toBe(true);
+    }
+    await expect(err.retry()).rejects.toThrow('create_finished');
+  });
+
   it('a non-network error inside retry() is final and zeroes the master', async () => {
     let master: Uint8Array | undefined;
     const { api } = mockApi((_b, _h, n) => (n === 1 ? 'throw' : json(409, { error: { code: 'conflict', message: 'x' } })));
