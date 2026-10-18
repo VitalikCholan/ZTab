@@ -14,7 +14,13 @@ describe('withdrawGate', () => {
   });
   it('ready when spendable', () => {
     expect(withdrawGate(bal(10, 0, 10), 25, 'open')).toEqual({ kind: 'ready' });
-    expect(withdrawGate(bal(10, 5, 2), 25, 'open')).toEqual({ kind: 'ready' });
+    expect(withdrawGate(bal(10, 5, 10), 25, 'open')).toEqual({ kind: 'ready' });
+    expect(withdrawGate(bal(10, 0, null), 25, 'open')).toEqual({ kind: 'ready' });
+  });
+  it('wait while any mined unspent note is younger than 10 confirmations, even with spendable funds', () => {
+    // The watcher sweeps everything or nothing and answers 409 while a note is younger.
+    expect(withdrawGate(bal(10, 5, 2), 25, 'open')).toEqual({ kind: 'wait', minutes: 4 });
+    expect(withdrawGate(bal(10, 5, 9), 25, 'open')).toEqual({ kind: 'wait', minutes: 1 });
   });
   it('nothing', () => {
     expect(withdrawGate(bal(0, 0, null), 25, 'open')).toEqual({ kind: 'nothing' });

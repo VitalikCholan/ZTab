@@ -17,9 +17,12 @@ export function withdrawGate(
 ): WithdrawGate {
   if (tabState === 'sweeping') return { kind: 'sweeping' };
   if (balance === undefined) return { kind: 'unknown' };
-  if (balance.spendable_zat > 0) return { kind: 'ready' };
-  if (balance.pending_zat > 0) {
-    const left = SWEEP_CONFIRMATIONS - (balance.min_unspent_confirmations ?? 0);
+  const min = balance.min_unspent_confirmations;
+  // The watcher sweeps everything or nothing (409 while any mined unspent note is younger than
+  // SWEEP_CONFIRMATIONS), so spendable funds alone are not enough.
+  if (balance.spendable_zat > 0 && (min === null || min >= SWEEP_CONFIRMATIONS)) return { kind: 'ready' };
+  if (balance.spendable_zat > 0 || balance.pending_zat > 0) {
+    const left = SWEEP_CONFIRMATIONS - (min ?? 0);
     return { kind: 'wait', minutes: Math.max(1, Math.ceil((left * blockIntervalSeconds) / 60)) };
   }
   return { kind: 'nothing' };
