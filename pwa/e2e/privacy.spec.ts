@@ -1,8 +1,18 @@
 // No link secret ever leaves the browser: every request of the create → links → participant/
-// group link → admin flow is recorded and searched for the fragments, their keys and the UFVK.
+// group link → admin flow is recorded and searched for the fragments, their keys and the UFVK,
+// and for the tab's plaintext (title, names, USD amounts), which lives only in the AES-GCM blobs.
 import { expect, test, type Page, type Request } from '@playwright/test';
 import { createViaForm, openAdminPage, recordCopies } from './harness/flow.ts';
 import { stub } from './harness/stub.ts';
+
+/** The tab's plaintext; none of it may appear in any request. */
+const PLAINTEXT = ['Dinner', 'Alice', 'Bob', '25.00', '50.00'];
+
+/**
+ * `needle` as a whole token. Base64 ciphertext is a run of letters and digits, so a short needle
+ * like "Bob" can occur inside it by chance; a real leak ("name":"Bob", ?q=Bob) is delimited.
+ */
+const asToken = (needle: string) => new RegExp(`(?<![A-Za-z0-9])${needle.replaceAll('.', '\\.')}(?![A-Za-z0-9])`);
 
 interface Recorded {
   method: string;
@@ -89,6 +99,7 @@ test.describe('privacy', { tag: '@desktop' }, () => {
           expect(h, `${r.method} ${r.url}`).not.toContain('#');
           expect(h, `${r.method} ${r.url}`).not.toContain('uviewtest');
           for (const k of keys) expect(h, `${r.method} ${r.url}`).not.toContain(k);
+          for (const t of PLAINTEXT) expect(h, `${r.method} ${r.url}: ${t}`).not.toMatch(asToken(t));
         }
       }
     });
