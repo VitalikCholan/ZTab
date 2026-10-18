@@ -189,6 +189,45 @@ describe('TabEntry', () => {
   });
 });
 
+describe('a link pasted into the open tab (same-document fragment navigation)', () => {
+  const ADMIN_HASH = `#a=${toBase64Url(hex(hkdfFixture.masterHex))}`;
+
+  async function mountAdmin() {
+    window.history.replaceState(null, '', `${PATH}${ADMIN_HASH}`);
+    await mount();
+    const { sessionStore } = await import('../../src/tab/session.ts');
+    await waitFor(() => expect(sessionStore.get(tabId)?.role).toBe('admin'));
+    expect(window.location.hash).toBe('');
+    return { sessionStore, admin: sessionStore.get(tabId)! };
+  }
+
+  const paste = (hash: string) => {
+    window.history.replaceState(null, '', `${PATH}${hash}`);
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  };
+
+  it('the new hash wins over the stored session, which is zeroed', async () => {
+    const { sessionStore, admin } = await mountAdmin();
+    const adminToken = admin.token;
+    paste(`#p=1.${toBase64Url(keyBytes)}`);
+    expect(await screen.findByText('Hi, Bob')).toBeInTheDocument();
+    expect(window.location.hash).toBe('');
+    expect(sessionStore.get(tabId)?.role).toBe('participant');
+    expect(adminToken.every((b) => b === 0)).toBe(true);
+    expect(admin.master!.every((b) => b === 0)).toBe(true);
+  });
+
+  it('a hash that does not parse is stripped and the current session stays', async () => {
+    const { sessionStore, admin } = await mountAdmin();
+    paste('#x=abc');
+    await waitFor(() => expect(window.location.hash).toBe(''));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('This link is incomplete')).toBeNull();
+    expect(sessionStore.get(tabId)).toBe(admin);
+    expect(admin.token.some((b) => b !== 0)).toBe(true);
+  });
+});
+
 describe('useTab refresh', () => {
   it('refresh after a 404 issues a new fetch', async () => {
     const f = vi.fn(async () => json(404, { error: { code: 'not_found', message: 'x' } }));
