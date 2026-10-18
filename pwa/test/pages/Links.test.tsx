@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router';
 import { toBase64Url } from '@ztab/crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Links, type LinksState } from '../../src/pages/Links.tsx';
+import { pendingCreated } from '../../src/tab/pending-created.ts';
 import { sessionStore } from '../../src/tab/session.ts';
 
 const TAB_ID = '11111111-2222-4333-8444-555555555555';
@@ -31,13 +32,14 @@ function Where() {
 }
 
 function mount(s?: LinksState) {
+  if (s) pendingCreated.put(s.created, s.summary);
   const router = createMemoryRouter(
     [
       { path: '/new/links', element: <Links /> },
       { path: '/new', element: <Where /> },
       { path: '/t/:tabId', element: <Where /> },
     ],
-    { initialEntries: [{ pathname: '/new/links', state: s }] },
+    { initialEntries: [{ pathname: '/new/links', state: s ? { tabId: s.created.tabId } : undefined }] },
   );
   return render(<RouterProvider router={router} />);
 }
@@ -56,6 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   sessionStore.clear(TAB_ID);
+  pendingCreated.discard(TAB_ID);
 });
 
 describe('Links', () => {
@@ -90,7 +93,7 @@ describe('Links', () => {
     expect(screen.getByText('Bob · $12.50')).toBeInTheDocument();
     await u.click(screen.getByRole('button', { name: 'Share Bob' }));
     expect(writeText).toHaveBeenLastCalledWith(
-      `Bob, your share of “Dinner” is $12.50 (≈ 0.0312 ZEC): ${ORIGIN}/t/${TAB_ID}#p=0.KEY`,
+      `Bob, your share of “Dinner” is $12.50 (≈ 0.03121099 ZEC): ${ORIGIN}/t/${TAB_ID}#p=0.KEY`,
     );
   });
 
@@ -121,5 +124,56 @@ describe('Links', () => {
     expect(screen.getByTestId('where').textContent).not.toContain('#');
     expect(sessionStore.get(TAB_ID)?.role).toBe('admin');
     expect(Array.from(s.created.master).every((b) => b === 0)).toBe(true);
+  });
+
+  it('a reload (second mount after leaving) redirects to /new', async () => {
+    const view = mount(state('individual'));
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    view.unmount();
+    await new Promise((r) => setTimeout(r, 10));
+    const router = createMemoryRouter(
+      [
+        { path: '/new/links', element: <Links /> },
+        { path: '/new', element: <Where /> },
+      ],
+      { initialEntries: [{ pathname: '/new/links', state: { tabId: TAB_ID } }] },
+    );
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByTestId('where')).toHaveTextContent('/new');
+  });
+
+  it('shows the admin link in a readonly field', () => {
+    mount(state('individual'));
+    const f = screen.getByLabelText('Admin link') as HTMLInputElement;
+    expect(f.readOnly).toBe(true);
+    expect(f.value).toBe(state('individual').created.adminUrl);
+  });
+
+  it('clipboard failure shows the manual-copy message and still enables Continue', async () => {
+    const u = setup();
+    writeText.mockRejectedValue(new Error('denied'));
+    mount(state('individual'));
+    await u.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await screen.findByText('Copy failed — select the link above and copy it manually')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+  });
+
+  it('a non-abort share failure is handled like a copy failure; AbortError is silent', async () => {
+    const share = vi.fn().mockRejectedValue(new DOMException('x', 'NotAllowedError'));
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    const u = setup();
+    mount(state('individual'));
+    await u.click(screen.getByRole('button', { name: 'Share admin link' }));
+    expect(await screen.findByText(/Copy failed/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+  });
+
+  it('a dismissed share sheet (AbortError) does not enable Continue', async () => {
+    const share = vi.fn().mockRejectedValue(new DOMException('x', 'AbortError'));
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    const u = setup();
+    mount(state('individual'));
+    await u.click(screen.getByRole('button', { name: 'Share admin link' }));
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
   });
 });

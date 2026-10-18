@@ -1,25 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
 import { CopyButton } from '../components/CopyButton.tsx';
-import { zecApprox } from '../components/ParticipantsEditor.tsx';
 import { ShareButton } from '../components/ShareButton.tsx';
-import { centsToUsdString, centsToZat } from '../domain/money.ts';
+import { centsToUsdString, centsToZat, zatToZecString } from '../domain/money.ts';
 import { sessionFromFragment } from '../tab/keys.ts';
 import { sessionStore } from '../tab/session.ts';
 import type { CreatedTab } from '../tab/create.ts';
+import { pendingCreated, type CreatedSummary } from '../tab/pending-created.ts';
 
 export interface LinksState {
   created: CreatedTab;
-  /** What the share texts need; nothing here is secret. */
-  summary: { title: string; usdPerZec: number; participants: { name: string; shareCents: number }[] };
+  summary: CreatedSummary;
 }
 
 const FLAG = 'ztab.adminWarningSeen';
 
 export function Links() {
-  const state = useLocation().state as LinksState | null;
-  if (!state?.created) return <Navigate to="/new" replace />;
-  return <LinksScreen {...state} />;
+  // Router state carries only the tab id (history.state is persisted); the links come from memory.
+  const tabId = (useLocation().state as { tabId?: string } | null)?.tabId;
+  const data = tabId ? pendingCreated.peek(tabId) : undefined;
+  if (!data) return <Navigate to="/new" replace />;
+  return <LinksScreen {...data} />;
 }
 
 function LinksScreen({ created, summary }: LinksState) {
@@ -37,7 +38,10 @@ function LinksScreen({ created, summary }: LinksState) {
     return () => {
       mounted.current = false;
       setTimeout(() => {
-        if (!mounted.current || handedOver.current) created.master.fill(0);
+        if (!mounted.current || handedOver.current) {
+          created.master.fill(0);
+          pendingCreated.discard(created.tabId);
+        }
       }, 0);
     };
   }, [created]);
@@ -65,7 +69,7 @@ function LinksScreen({ created, summary }: LinksState) {
   const textFor = (index: number, name: string, url: string) => {
     if (index < 0) return `Your share of “${title}”: ${url}`;
     const p = summary.participants[index];
-    const zec = zecApprox(centsToZat(p.shareCents, summary.usdPerZec));
+    const zec = zatToZecString(centsToZat(p.shareCents, summary.usdPerZec));
     return `${name}, your share of “${title}” is ${centsToUsdString(p.shareCents)} (≈ ${zec} ZEC): ${url}`;
   };
 
@@ -75,7 +79,14 @@ function LinksScreen({ created, summary }: LinksState) {
       <section className="flex flex-col gap-3">
         <h2 className="font-medium">Your admin link</h2>
         <p className="font-medium text-red-700">Save this link now. It is the only key to the money. We cannot recover it.</p>
-        <div className="flex flex-wrap gap-2">
+        <input
+          readOnly
+          aria-label="Admin link"
+          value={created.adminUrl}
+          onFocus={(e) => e.currentTarget.select()}
+          className="rounded border border-neutral-400 p-3 font-mono text-xs"
+        />
+        <div className="flex flex-wrap items-center gap-2">
           <CopyButton text={created.adminUrl} onDone={done} />
           <ShareButton
             title={title}
@@ -107,7 +118,7 @@ function LinksScreen({ created, summary }: LinksState) {
                     ? l.name
                     : `${l.name} · ${centsToUsdString(summary.participants[l.index].shareCents)}`}
                 </span>
-                <ShareButton title={title} text={textFor(l.index, l.name, l.url)} url={l.url} label={`Share ${l.name}`} />
+                <ShareButton title={title} text={textFor(l.index, l.name, l.url)} url={l.url} label={`Share ${l.name}`} failText="Copy failed" />
               </div>
             ))}
           </section>

@@ -1,14 +1,14 @@
 import { useCopiedToast } from './Toast.tsx';
 
-export function CopyButton({ text, label = 'Copy', onDone }: { text: string; label?: string; onDone?: () => void }) {
-  const { toast, show } = useCopiedToast();
+export function CopyButton({ text, label = 'Copy', failText, onDone }: { text: string; label?: string; failText?: string; onDone?: () => void }) {
+  const { toast, show, fail } = useCopiedToast(failText);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
+      show();
     } catch {
-      return;
+      fail();
     }
-    show();
     onDone?.();
   };
   return (

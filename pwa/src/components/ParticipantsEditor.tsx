@@ -1,15 +1,10 @@
-import { centsToUsdString, centsToZat, parseUsdInput, splitEqually } from '../domain/money.ts';
+import { centsToUsdString, centsToZat, parseUsdInput, splitEqually, zatToZecString } from '../domain/money.ts';
 
 export const MAX_PARTICIPANTS = 20;
 
 export interface Row {
   name: string;
   share: string;
-}
-
-/** `≈` display value: rounded to 4 decimals, enough for a person to read. */
-export function zecApprox(zat: number): string {
-  return (Math.round(zat / 1e4) / 1e4).toFixed(4);
 }
 
 export function ParticipantsEditor({
@@ -66,7 +61,7 @@ export function ParticipantsEditor({
                 className="min-w-0 flex-1 rounded border border-neutral-400 p-3"
               />
               <span className="text-sm text-neutral-600">
-                {cents !== null && cents > 0 && usdPerZec ? `≈ ${zecApprox(centsToZat(cents, usdPerZec))} ZEC` : ''}
+                {cents !== null && cents > 0 && usdPerZec ? `≈ ${zatToZecString(centsToZat(cents, usdPerZec))} ZEC` : ''}
               </span>
             </div>
           </div>

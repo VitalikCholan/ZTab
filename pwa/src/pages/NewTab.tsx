@@ -5,13 +5,13 @@ import { useNavigate } from 'react-router';
 import { api } from '../api/instance.ts';
 import { ApiRequestError } from '../api/client.ts';
 import { AddressField, type AddressCheck } from '../components/AddressField.tsx';
-import { ParticipantsEditor, zecApprox, type Row } from '../components/ParticipantsEditor.tsx';
+import { ParticipantsEditor, type Row } from '../components/ParticipantsEditor.tsx';
 import { parseRate, RateField, type RateState } from '../components/RateField.tsx';
 import { config } from '../config.ts';
-import { centsToZat, parseUsdInput, sharesMatchTotal } from '../domain/money.ts';
+import { centsToZat, parseUsdInput, zatToZecString, sharesMatchTotal } from '../domain/money.ts';
 import { AddressMismatchError, createTab, CreateNetworkError, type CreatedTab, type CreateInput } from '../tab/create.ts';
 import { useWasmState } from '../wasm.ts';
-import type { LinksState } from './Links.tsx';
+import { pendingCreated } from '../tab/pending-created.ts';
 
 type Failure =
   | { kind: 'network'; error: CreateNetworkError }
@@ -87,11 +87,8 @@ export function NewTab() {
 
   const succeed = (created: CreatedTab, input: CreateInput) => {
     pending.current = null;
-    const state: LinksState = {
-      created,
-      summary: { title: input.title, usdPerZec: input.usdPerZec, participants: input.participants },
-    };
-    navigate('/new/links', { state });
+    pendingCreated.put(created, { title: input.title, usdPerZec: input.usdPerZec, participants: input.participants });
+    navigate('/new/links', { state: { tabId: created.tabId } });
   };
 
   const submit = async () => {
@@ -139,7 +136,7 @@ export function NewTab() {
   };
 
   const label = wasm === 'ready' ? (busy ? 'Creating…' : 'Create tab') : 'Loading crypto module…';
-  const totalZec = totalCents && usdPerZec ? zecApprox(centsToZat(totalCents, usdPerZec)) : null;
+  const totalZec = totalCents && usdPerZec ? zatToZecString(centsToZat(totalCents, usdPerZec)) : null;
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-5 px-4 py-6 font-sans">

@@ -20,7 +20,11 @@ import { NewTab } from '../../src/pages/NewTab.tsx';
 
 function Where() {
   const l = useLocation();
-  return <div data-testid="where">{l.pathname}</div>;
+  return (
+    <div data-testid="where" data-state={JSON.stringify(l.state)}>
+      {l.pathname}
+    </div>
+  );
 }
 
 function mount() {
@@ -67,7 +71,7 @@ describe('NewTab', () => {
     expect(create()).toBeDisabled();
     await u.type(screen.getByLabelText('Tab name'), 'Dinner');
     await u.type(screen.getByLabelText('Total, USD'), '50.00');
-    expect(screen.getByText('≈ 1.2500 ZEC')).toBeInTheDocument();
+    expect(screen.getByText('≈ 1.25 ZEC')).toBeInTheDocument();
     await u.type(screen.getByLabelText('Name 1'), 'Ann');
     await u.type(screen.getByLabelText('Share USD 1'), '50.00');
     expect(create()).toBeDisabled(); // no mode, no address
@@ -169,6 +173,10 @@ describe('NewTab', () => {
     await fillValid(u);
     await u.click(create());
     await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/new/links'));
+    // Router state is persisted in history.state: it must hold no links or keys.
+    const stateJson = screen.getByTestId('where').dataset.state!;
+    expect(JSON.parse(stateJson)).toEqual({ tabId: 't' });
+    expect(stateJson).not.toMatch(/#a=|#p=|#g=|adminUrl|master/);
   });
 
   it('network error: Retry calls retry(), not createTab; leaving abandons', async () => {
