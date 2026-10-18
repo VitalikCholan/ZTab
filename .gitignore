@@ -27,3 +27,4 @@ wallets/
 # pwa
 test-results/
 playwright-report/
+pwa/e2e/.harness/
