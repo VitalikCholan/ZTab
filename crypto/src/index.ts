@@ -2,6 +2,7 @@ export { CryptoError, fromWasmError } from './errors.ts';
 export type { CryptoErrorCode } from './errors.ts';
 export type * from './types.ts';
 export {
+  canonicalRecipient,
   deriveAddress,
   deriveTabAccount,
   inspectPczt,

@@ -39,3 +39,10 @@ pub fn encode_orchard(network: Network, receiver: orchard::Address) -> Result<St
         .map(|ua| ua.encode(&network))
         .ok_or_else(|| CryptoError::internal("unified address from an Orchard receiver"))
 }
+
+/// The recipient as PCZT outputs show it: the Orchard receiver alone, as a unified address of
+/// `network`. A wallet UA with Orchard + other receivers and its Orchard-only form compare equal
+/// after this. Refuses exactly what `validate_recipient` refuses.
+pub fn canonical_recipient(network: Network, encoded: &str) -> Result<String, CryptoError> {
+    encode_orchard(network, orchard_receiver(network, encoded)?)
+}

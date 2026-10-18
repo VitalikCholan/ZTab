@@ -70,6 +70,13 @@ pub fn js_validate_recipient(network: &str, address: &str) -> Result<(), JsError
     recipient::validate_recipient(network, address).map_err(js)
 }
 
+/// The Orchard-only unified address of `address` (how `inspectPczt` prints outputs).
+#[wasm_bindgen(js_name = canonicalRecipient)]
+pub fn js_canonical_recipient(network: &str, address: &str) -> Result<String, JsError> {
+    let network = network::parse_network(network).map_err(js)?;
+    recipient::canonical_recipient(network, address).map_err(js)
+}
+
 /// JSON `{ outputs: [{ address, zat }], feeZat, totalInZat, txid }`.
 #[wasm_bindgen(js_name = inspectPczt)]
 pub fn js_inspect_pczt(network: &str, pczt: &[u8]) -> Result<String, JsError> {
