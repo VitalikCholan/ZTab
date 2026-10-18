@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router';
 import { ErrorScreen } from '../components/ErrorScreen.tsx';
-import { StaleBanner } from '../components/StaleBanner.tsx';
-import { useTab } from '../hooks/useTab.ts';
 import { sessionFromFragment, type Session } from '../tab/keys.ts';
 import { sessionStore } from '../tab/session.ts';
 import { useWasmState } from '../wasm.ts';
+import { Admin } from './Admin.tsx';
+import { Group } from './Group.tsx';
 import { Incomplete } from './Incomplete.tsx';
 import { Participant } from './Participant.tsx';
-
-const POLL_MS = 10_000;
 
 // In-flight resolutions per tab: the hash is read (and removed) exactly once even if the
 // effect runs twice (StrictMode) before the async key derivation finishes.
@@ -63,21 +61,6 @@ export function TabEntry() {
   if (!resolved || resolved.tabId !== tabId) return null;
   if (!resolved.session) return <Incomplete />;
   if (resolved.session.role === 'participant') return <Participant session={resolved.session} />;
-  return <TabRole session={resolved.session} />;
-}
-
-// Placeholder per role until Tasks 7-9 add the real pages.
-function TabRole({ session }: { session: Session }) {
-  const { view, error, stale } = useTab(session, POLL_MS);
-  if (error?.status === 404) return <ErrorScreen title="This tab does not exist or the link is wrong." />;
-  if (error?.status === 429) return <ErrorScreen title="Too many requests from your network, wait a minute." />;
-  if (error) return <ErrorScreen title="Something went wrong">{error.message}</ErrorScreen>;
-  return (
-    <main className="mx-auto max-w-md p-6 font-sans">
-      {stale && <StaleBanner />}
-      <p>{session.role}</p>
-      <p>{session.tabId}</p>
-      {view === null && <p>Loading…</p>}
-    </main>
-  );
+  if (resolved.session.role === 'group') return <Group session={resolved.session} />;
+  return <Admin session={resolved.session} />;
 }

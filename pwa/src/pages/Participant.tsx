@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Amount } from '../components/Amount.tsx';
 import { ErrorScreen } from '../components/ErrorScreen.tsx';
 import { PayPanel } from '../components/PayPanel.tsx';
@@ -6,25 +6,11 @@ import { StaleBanner } from '../components/StaleBanner.tsx';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { centsToUsdString, zatToCents } from '../domain/money.ts';
 import { computeStatus, type StatusResult } from '../domain/status.ts';
+import { usePayBoost } from '../hooks/usePayBoost.ts';
 import { useTab } from '../hooks/useTab.ts';
 import { isTouchPhone } from '../platform.ts';
 import { type ParticipantBlob } from '../tab/blobs.ts';
 import type { Session } from '../tab/keys.ts';
-
-const POLL_MS = 10_000;
-const BOOST_POLL_MS = 5_000;
-const BOOST_DURATION_MS = 10 * 60_000;
-
-/** Poll faster for 10 minutes after the participant starts paying. */
-function usePayBoost(): [intervalMs: number, boost: () => void] {
-  const [boostedAt, setBoostedAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (boostedAt === null) return;
-    const t = setTimeout(() => setBoostedAt(null), BOOST_DURATION_MS);
-    return () => clearTimeout(t);
-  }, [boostedAt]);
-  return [boostedAt === null ? POLL_MS : BOOST_POLL_MS, () => setBoostedAt(Date.now())];
-}
 
 function sentence(r: StatusResult, b: ParticipantBlob): string | null {
   const fiat = (zat: number) => zatToCents(zat, b.rate_usd_per_zec);
