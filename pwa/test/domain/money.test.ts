@@ -39,3 +39,11 @@ describe('money', () => {
       expect(parseUsdInput(bad), bad).toBeNull();
   });
 });
+
+describe('zatToCents', () => {
+  it('converts with the fixed rate', async () => {
+    const { zatToCents } = await import('../../src/domain/money');
+    expect(zatToCents(3121099, 400.5)).toBe(1250);
+    expect(zatToCents(0, 400.5)).toBe(0);
+  });
+});

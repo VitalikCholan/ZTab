@@ -35,3 +35,8 @@ export function parseUsdInput(text: string): number | null {
   if (!m) return null;
   return Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0'));
 }
+
+/** Fiat value of a zatoshi amount at the tab's fixed rate (display only), rounded to cents. */
+export function zatToCents(zat: number, usdPerZec: number): number {
+  return Math.round((zat / ZAT_PER_ZEC) * usdPerZec * 100);
+}

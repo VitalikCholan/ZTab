@@ -7,6 +7,7 @@ import { sessionFromFragment, type Session } from '../tab/keys.ts';
 import { sessionStore } from '../tab/session.ts';
 import { useWasmState } from '../wasm.ts';
 import { Incomplete } from './Incomplete.tsx';
+import { Participant } from './Participant.tsx';
 
 const POLL_MS = 10_000;
 
@@ -61,6 +62,7 @@ export function TabEntry() {
   if (wasm === 'loading') return <p className="p-6">Loading crypto module…</p>;
   if (!resolved || resolved.tabId !== tabId) return null;
   if (!resolved.session) return <Incomplete />;
+  if (resolved.session.role === 'participant') return <Participant session={resolved.session} />;
   return <TabRole session={resolved.session} />;
 }
 

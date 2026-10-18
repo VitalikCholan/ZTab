@@ -57,7 +57,7 @@ afterEach(() => {
 describe('TabEntry', () => {
   it('stores the session from the fragment and clears the hash', async () => {
     await mount();
-    expect(await screen.findByText(/participant/i)).toBeInTheDocument();
+    expect(await screen.findByText('Hi, Bob')).toBeInTheDocument();
     expect(window.location.hash).toBe('');
     const { sessionStore } = await import('../../src/tab/session.ts');
     expect(sessionStore.get(tabId)?.role).toBe('participant');
@@ -65,17 +65,17 @@ describe('TabEntry', () => {
 
   it('reload after fragment removal keeps the key in memory', async () => {
     const first = await mount();
-    await screen.findByText(/participant/i);
+    await screen.findByText('Hi, Bob');
     first.unmount();
     expect(window.location.hash).toBe('');
     await mount();
-    expect(await screen.findByText(/participant/i)).toBeInTheDocument();
+    expect(await screen.findByText('Hi, Bob')).toBeInTheDocument();
     expect(screen.queryByText('This link is incomplete')).toBeNull();
   });
 
   it('a fresh module without a hash renders Incomplete', async () => {
     const first = await mount();
-    await screen.findByText(/participant/i);
+    await screen.findByText('Hi, Bob');
     first.unmount();
     vi.resetModules();
     await mount();
@@ -124,12 +124,12 @@ describe('TabEntry', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       await mount();
-      await screen.findByText(/participant/i);
+      await screen.findByText('Hi, Bob');
       await vi.advanceTimersByTimeAsync(11000);
       await waitFor(() =>
         expect(screen.getByText('Live data is delayed; showing the last known status.')).toBeInTheDocument(),
       );
-      expect(screen.getByText(/participant/i)).toBeInTheDocument();
+      expect(screen.getByText('Hi, Bob')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -153,7 +153,7 @@ describe('TabEntry', () => {
 
   it('never changes document.title', async () => {
     await mount();
-    await screen.findByText(/participant/i);
+    await screen.findByText('Hi, Bob');
     expect(document.title).toBe('ZTab');
   });
 
