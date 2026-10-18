@@ -43,6 +43,26 @@ pub struct TabFacts {
     pub tip_height: u32,
     pub stale: bool,
     pub participants: Vec<ParticipantFacts>,
+    pub balance: TabBalance,
+}
+
+/// What the tab's account holds right now, from its unspent notes and its sweep history.
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct TabBalance {
+    /// Unspent notes at least `confirmations_sweep` deep: what a sweep takes today.
+    pub spendable_zat: u64,
+    /// Unspent notes still shallower than that, mined or in the mempool.
+    pub pending_zat: u64,
+    /// Output of the tab's sweeps that are mined.
+    pub swept_zat: u64,
+    /// Fewest confirmations over the unspent mined notes; `None` when there are none.
+    pub min_unspent_confirmations: Option<u32>,
+}
+
+/// An unspent received note of the tab's account.
+pub struct UnspentNote {
+    pub value_zat: u64,
+    pub mined_height: Option<u32>,
 }
 
 /// One received note of the tab's account, joined with its transaction and address.
@@ -201,6 +221,91 @@ pub fn note_rows(wallet: &WalletStore, account_uuid: Uuid) -> Result<Vec<NoteRow
         .collect()
 }
 
+/// The tab's unspent notes: those without a row in the pool's `*_received_note_spends`
+/// (a spend by a transaction the wallet holds, mined or not, makes a note spent).
+pub fn unspent_notes(
+    wallet: &WalletStore,
+    account_uuid: Uuid,
+) -> Result<Vec<UnspentNote>, WatcherError> {
+    let conn = wallet.read_conn();
+    let mut st = conn
+        .prepare(
+            "SELECT r.value, t.mined_height
+               FROM v_received_outputs r
+               JOIN accounts acc ON acc.id = r.account_id
+               JOIN transactions t ON t.id_tx = r.transaction_id
+          LEFT JOIN v_received_output_spends s
+                 ON s.pool = r.pool AND s.received_output_id = r.id_within_pool_table
+              WHERE acc.uuid = ?1 AND r.pool IN (3, 4) AND s.received_output_id IS NULL",
+        )
+        .map_err(werr)?;
+    let raw: Vec<(i64, Option<i64>)> = st
+        .query_map([account_uuid.as_bytes().to_vec()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .map_err(werr)?
+        .collect::<Result<_, _>>()
+        .map_err(werr)?;
+    raw.into_iter()
+        .map(|(value, mined)| {
+            Ok(UnspentNote {
+                value_zat: u64::try_from(value).map_err(werr)?,
+                mined_height: mined.map(u32::try_from).transpose().map_err(werr)?,
+            })
+        })
+        .collect()
+}
+
+/// Pure split of unspent notes by depth. A tip below a note's mined height counts as 0
+/// confirmations, like payments.
+pub fn balance_of(
+    notes: &[UnspentNote],
+    swept_zat: u64,
+    tip: u32,
+    confirmations_sweep: u32,
+) -> TabBalance {
+    let mut b = TabBalance {
+        swept_zat,
+        ..Default::default()
+    };
+    for n in notes {
+        let confirmations = n
+            .mined_height
+            .and_then(|h| tip.checked_sub(h))
+            .map_or(0, |d| d + 1);
+        if confirmations >= confirmations_sweep.max(1) {
+            b.spendable_zat += n.value_zat;
+        } else {
+            b.pending_zat += n.value_zat;
+        }
+        if n.mined_height.is_some() {
+            b.min_unspent_confirmations = Some(
+                b.min_unspent_confirmations
+                    .map_or(confirmations, |m| m.min(confirmations)),
+            );
+        }
+    }
+    b
+}
+
+/// [`balance_of`] over the account's unspent notes and the tab's mined sweeps.
+pub fn tab_balance(
+    wallet: &WalletStore,
+    meta: &MetaStore,
+    tab: &TabRow,
+    tip: u32,
+    confirmations_sweep: u32,
+) -> Result<TabBalance, WatcherError> {
+    let swept = meta
+        .sweep_history(tab.tab_id)?
+        .iter()
+        .filter(|h| h.mined_height.is_some())
+        .map(|h| h.output_zat)
+        .sum();
+    let notes = unspent_notes(wallet, tab.account_uuid)?;
+    Ok(balance_of(&notes, swept, tip, confirmations_sweep))
+}
+
 /// The tab's participant addresses from `ztab.sqlite`. Registration stores them; a tab
 /// registered before that (or interrupted between its rows) is backfilled once here, which
 /// is the only path that derives them through the wallet (and takes its `db()` lock).
@@ -253,6 +358,7 @@ pub fn tab_facts(
         tip_height: tip,
         stale,
         participants,
+        balance: tab_balance(wallet, meta, tab, tip, cfg.confirmations_sweep)?,
     })
 }
 

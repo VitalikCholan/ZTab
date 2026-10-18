@@ -68,6 +68,36 @@ pub struct SweepStatus {
     pub txid: Option<String>,
     pub mined_height: Option<u32>,
     pub confirmations: u32,
+    /// Every broadcast sweep of the tab, newest first.
+    pub history: Vec<SweepHistoryOut>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SweepHistoryOut {
+    pub txid: String,
+    pub output_zat: u64,
+    pub fee_zat: u64,
+    pub mined_height: Option<u32>,
+    pub confirmations: u32,
+}
+
+fn history_out(
+    state: &AppState,
+    tab_id: Uuid,
+    tip: u32,
+) -> Result<Vec<SweepHistoryOut>, WatcherError> {
+    Ok(state
+        .meta
+        .sweep_history(tab_id)?
+        .into_iter()
+        .map(|h| SweepHistoryOut {
+            confirmations: confirmations(tip, h.mined_height),
+            txid: h.txid,
+            output_zat: h.output_zat,
+            fee_zat: h.fee_zat,
+            mined_height: h.mined_height,
+        })
+        .collect())
 }
 
 fn parse_pczt(bytes: &[u8]) -> Result<Pczt, WatcherError> {
@@ -289,6 +319,9 @@ fn create_proved_pczt_blocking(
         .map_err(|e| WatcherError::Wallet(format!("serialize pczt: {e:?}")))?;
     let pczt_b64 = B64.encode(&bytes);
     state.meta.put_sweep(tab.tab_id, &txid, expiry_height)?;
+    state
+        .meta
+        .record_sweep_offer(tab.tab_id, &txid, output_zat, fee_zat)?;
     tracing::info!(tab = %tab.tab_id, "sweep offered");
     Ok(SweepOffer {
         pczt_b64,
@@ -455,6 +488,7 @@ pub async fn broadcast_signed(
     drop(client);
     send_outcome(resp.error_code, &resp.error_message, node_knows_tx)?;
     state.meta.mark_broadcast(tab.tab_id, &offered.txid)?;
+    state.meta.mark_sweep_broadcast(&offered.txid)?;
     state.meta.set_tab_state(tab.tab_id, TabState::Sweeping)?;
     tracing::info!(tab = %tab.tab_id, "sweep broadcast");
     tracing::debug!(tab = %tab.tab_id, txid = %offered.txid, "sweep broadcast txid");
@@ -590,18 +624,24 @@ pub fn advance_sweeping_tabs(state: &AppState) -> Result<usize, WatcherError> {
 /// tab's sweep lock.
 fn advance(state: &AppState, tab_id: Uuid) -> Result<SweepStatus, WatcherError> {
     let tab = reload(state, tab_id)?;
+    let tip = state.health.tip_height.load(Ordering::Relaxed);
     let Some(sweep) = state.meta.get_sweep(tab.tab_id)? else {
         return Ok(SweepStatus {
             state: tab.state,
             txid: None,
             mined_height: None,
             confirmations: 0,
+            history: history_out(state, tab.tab_id, tip)?,
         });
     };
-    let tip = state.health.tip_height.load(Ordering::Relaxed);
     let synced = state.health.synced_height.load(Ordering::Relaxed);
     let mined = state.wallet.mined_height_of(&sweep.txid)?;
     let confirmations = confirmations(tip, mined);
+    if let Some(height) = mined {
+        // Seen mined means it was broadcast, even if the request reporting it failed.
+        state.meta.mark_sweep_broadcast(&sweep.txid)?;
+        state.meta.mark_sweep_mined(&sweep.txid, height)?;
+    }
     let new_state = next_state(
         tab.state,
         mined,
@@ -622,6 +662,7 @@ fn advance(state: &AppState, tab_id: Uuid) -> Result<SweepStatus, WatcherError> 
         txid: Some(sweep.txid),
         mined_height: mined,
         confirmations,
+        history: history_out(state, tab.tab_id, tip)?,
     })
 }
 
