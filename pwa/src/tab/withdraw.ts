@@ -1,4 +1,5 @@
 import {
+  canonicalRecipient,
   deriveTabAccount,
   inspectPczt,
   signPczt,
@@ -23,7 +24,33 @@ export interface PreparedWithdraw {
   reason?: WithdrawMismatch;
 }
 
+/**
+ * Local fee ceiling. The server summary comes from the same untrusted watcher as the PCZT, so
+ * `feeZat === fee_zat` only proves the server agrees with itself; this bounds what it can take.
+ */
+export const MAX_FEE_ZAT = 500_000;
+
 const sumOutputs = (s: PcztSummary) => s.outputs.reduce((a, o) => a + o.zat, 0);
+
+/**
+ * Pure verdict on a sweep PCZT. `inspectPczt` prints each output as an Orchard-only UA, so the
+ * recipient (a wallet UA, possibly with Sapling/transparent receivers) is canonicalised first.
+ */
+export function checkWithdraw(
+  inspected: PcztSummary,
+  serverSummary: SweepOffer['summary'],
+  recipient: string,
+): { ok: true } | { ok: false; reason: WithdrawMismatch } {
+  const want = canonicalRecipient(config.network, recipient);
+  if (inspected.outputs.length === 0 || inspected.outputs.some((o) => o.address !== want)) {
+    return { ok: false, reason: 'recipient' };
+  }
+  if (sumOutputs(inspected) !== serverSummary.output_zat) return { ok: false, reason: 'amount' };
+  if (inspected.feeZat !== serverSummary.fee_zat || inspected.feeZat > MAX_FEE_ZAT) {
+    return { ok: false, reason: 'fee' };
+  }
+  return { ok: true };
+}
 
 /** Asks the watcher for a sweep PCZT and checks it against `recipient` and the server's own summary. */
 export async function prepareWithdraw(api: ApiClient, session: Session, recipient: string): Promise<PreparedWithdraw> {
@@ -32,15 +59,7 @@ export async function prepareWithdraw(api: ApiClient, session: Session, recipien
   if (!pczt) throw new Error('invalid_pczt');
   const inspected = inspectPczt(config.network, pczt);
   const serverSummary = offer.summary;
-
-  let reason: WithdrawMismatch | undefined;
-  if (inspected.outputs.length === 0 || inspected.outputs.some((o) => o.address !== recipient)) reason = 'recipient';
-  else if (sumOutputs(inspected) !== serverSummary.output_zat) reason = 'amount';
-  else if (inspected.feeZat !== serverSummary.fee_zat) reason = 'fee';
-
-  return reason
-    ? { pczt, inspected, serverSummary, recipient, ok: false, reason }
-    : { pczt, inspected, serverSummary, recipient, ok: true };
+  return { pczt, inspected, serverSummary, recipient, ...checkWithdraw(inspected, serverSummary, recipient) };
 }
 
 /**

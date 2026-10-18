@@ -11,6 +11,12 @@ export const hkdfFixture = JSON.parse(read('../../../crypto/test/fixtures/hkdf.j
   tokenHashHex: { admin: string; group: string; participant0: string };
 };
 
+/** Built by crypto/rust/tests/recipient.rs: the tab recipient's Orchard receiver + Sapling + P2PKH. */
+export const recipientFixture = JSON.parse(read('../../../crypto/test/fixtures/recipient.json').toString('utf8')) as {
+  multiReceiver: string;
+  orchardOnly: string;
+};
+
 export interface TabExpected {
   network: 'test';
   recipient: string;

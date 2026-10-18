@@ -3,8 +3,8 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../../src/api/client.ts';
 import type { SweepOffer } from '../../src/api/types.ts';
 import type { Session } from '../../src/tab/keys.ts';
-import { prepareWithdraw, signAndBroadcast } from '../../src/tab/withdraw.ts';
-import { hex, json, tabExpected as E, tabSpendSeedHex, tabSweepPczt } from '../helpers/fixtures.ts';
+import { checkWithdraw, MAX_FEE_ZAT, prepareWithdraw, signAndBroadcast } from '../../src/tab/withdraw.ts';
+import { hex, json, recipientFixture, tabExpected as E, tabSpendSeedHex, tabSweepPczt } from '../helpers/fixtures.ts';
 import { loadTestWasm } from '../helpers/wasm.ts';
 
 const TAB_ID = '0f6d3f4e-7c1b-4a8e-9a9b-2f3c4d5e6f70';
@@ -86,7 +86,46 @@ describe('prepareWithdraw', () => {
   });
 });
 
+describe('prepareWithdraw with a wallet UA', () => {
+  it('a multi-receiver UA whose Orchard receiver is the fixture recipient → ok true', async () => {
+    expect(recipientFixture.orchardOnly).toBe(E.recipient);
+    const { api, sweepBodies } = mockApi(offer());
+    const p = await prepareWithdraw(api, session, recipientFixture.multiReceiver);
+    expect(sweepBodies).toEqual([{ recipient_address: recipientFixture.multiReceiver }]);
+    expect(p).toMatchObject({ ok: true, recipient: recipientFixture.multiReceiver });
+  });
+});
+
+describe('checkWithdraw', () => {
+  const summary = (feeZat: number) => ({
+    inspected: { outputs: [{ address: E.recipient, zat: 1_000_000 }], feeZat, totalInZat: 1_000_000 + feeZat, txid: 'aa' },
+    server: { inputs_zat: 1_000_000 + feeZat, output_zat: 1_000_000, fee_zat: feeZat, expiry_height: 1, txid: 'aa' },
+  });
+
+  it('a fee above MAX_FEE_ZAT is refused even when the server agrees', () => {
+    const { inspected, server } = summary(MAX_FEE_ZAT + 1);
+    expect(checkWithdraw(inspected, server, E.recipient)).toEqual({ ok: false, reason: 'fee' });
+  });
+
+  it('a fee of exactly MAX_FEE_ZAT passes', () => {
+    const { inspected, server } = summary(MAX_FEE_ZAT);
+    expect(checkWithdraw(inspected, server, E.recipient)).toEqual({ ok: true });
+  });
+
+  it('an empty output list is a recipient mismatch', () => {
+    const { inspected, server } = summary(10_000);
+    expect(checkWithdraw({ ...inspected, outputs: [] }, server, E.recipient)).toEqual({ ok: false, reason: 'recipient' });
+  });
+});
+
 describe('signAndBroadcast', () => {
+  it('signs for a multi-receiver wallet UA', async () => {
+    const { api, broadcasts } = mockApi(offer());
+    const prepared = await prepareWithdraw(api, session, recipientFixture.multiReceiver);
+    expect(await signAndBroadcast(api, session, prepared, async () => hex(tabSpendSeedHex))).toEqual({ txid: E.txid });
+    expect(inspectPczt('test', fromBase64Url(broadcasts[0])!).txid).toBe(E.txid);
+  });
+
   it('signs the fixture and broadcasts a base64url PCZT that inspectPczt still accepts', async () => {
     const { api, broadcasts } = mockApi(offer());
     const prepared = await prepareWithdraw(api, session, E.recipient);

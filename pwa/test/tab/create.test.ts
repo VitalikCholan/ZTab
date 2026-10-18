@@ -1,4 +1,5 @@
 import {
+  createMaster,
   deriveAddress,
   deriveToken,
   encodeToken,
@@ -12,7 +13,7 @@ import {
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { ApiClient, ApiRequestError, type CreateTabBody } from '../../src/api/client.ts';
 import { adminBlobV1, groupBlobV1, openTyped, participantBlobV1 } from '../../src/tab/blobs.ts';
-import { AddressMismatchError, createTab, type CreateInput } from '../../src/tab/create.ts';
+import { AddressMismatchError, CreateNetworkError, createTab, type CreateInput } from '../../src/tab/create.ts';
 import { centsToZat } from '../../src/domain/money.ts';
 import { json } from '../helpers/fixtures.ts';
 import { loadTestWasm } from '../helpers/wasm.ts';
@@ -148,14 +149,59 @@ describe('createTab', () => {
     );
   });
 
-  it('first PUT network error then success → second call carries the admin Bearer and the same body', async () => {
+  it('a network failure throws CreateNetworkError; retry() re-sends the identical body with the admin Bearer', async () => {
     const { api, puts } = mockApi((b, _h, n) => (n === 1 ? 'throw' : honest(b, 200)));
-    const out = await createTab(input('individual'), { api, network: 'test', now: () => NOW, origin: ORIGIN });
-    expect(puts).toHaveLength(2);
+    const e = await createTab(input('individual'), { api, network: 'test', now: () => NOW, origin: ORIGIN }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(CreateNetworkError);
+    const err = e as CreateNetworkError;
+    expect(err.code).toBe('network');
+    expect(typeof err.retry).toBe('function');
+    expect(puts).toHaveLength(1);
     expect(puts[0].headers.has('authorization')).toBe(false);
+
+    const out = await err.retry();
+    expect(out.tabId).toBe(err.tabId);
+    expect(puts).toHaveLength(2);
+    expect(puts[1].url).toBe(`https://api.example/tabs/${err.tabId}`);
+    expect(puts[1].body).toEqual(puts[0].body);
     const admin = parseFragment(new URL(out.adminUrl).hash);
     expect(puts[1].headers.get('authorization')).toBe(`Bearer ${encodeToken(await deriveToken(keyOf(admin), out.tabId))}`);
-    expect(puts[1].body).toEqual(puts[0].body);
+    expect(out.master.some((b) => b !== 0)).toBe(true);
+  });
+
+  it('a second network failure inside retry() throws again with a still-usable retry', async () => {
+    const { api, puts } = mockApi((b, _h, n) => (n <= 2 ? 'throw' : honest(b, 200)));
+    const first = (await createTab(input('group'), { api, network: 'test', now: () => NOW, origin: ORIGIN }).catch((x: unknown) => x)) as CreateNetworkError;
+    const second = (await first.retry().catch((x: unknown) => x)) as CreateNetworkError;
+    expect(second).toBeInstanceOf(CreateNetworkError);
+    expect(second.tabId).toBe(first.tabId);
+    const out = await second.retry();
+    expect(out.tabId).toBe(first.tabId);
+    expect(puts).toHaveLength(3);
+    expect(puts[2].body).toEqual(puts[0].body);
+    expect(puts[2].headers.get('authorization')).toBe(puts[1].headers.get('authorization'));
+    expect(puts[1].headers.get('authorization')).toMatch(/^Bearer [A-Za-z0-9_-]{43}$/);
+  });
+
+  it('abandon() zeroes the master and makes retry() refuse', async () => {
+    let master: Uint8Array | undefined;
+    const { api, puts } = mockApi(() => 'throw');
+    const deps = { api, network: 'test' as const, now: () => NOW, origin: ORIGIN, createMaster: () => (master = createMaster()) };
+    const err = (await createTab(input('individual'), deps).catch((x: unknown) => x)) as CreateNetworkError;
+    expect(master!.some((b) => b !== 0)).toBe(true);
+    err.abandon();
+    expect(master!.every((b) => b === 0)).toBe(true);
+    await expect(err.retry()).rejects.toThrow('create_finished');
+    expect(puts).toHaveLength(1);
+  });
+
+  it('a non-network error inside retry() is final and zeroes the master', async () => {
+    let master: Uint8Array | undefined;
+    const { api } = mockApi((_b, _h, n) => (n === 1 ? 'throw' : json(409, { error: { code: 'conflict', message: 'x' } })));
+    const deps = { api, network: 'test' as const, now: () => NOW, origin: ORIGIN, createMaster: () => (master = createMaster()) };
+    const err = (await createTab(input('individual'), deps).catch((x: unknown) => x)) as CreateNetworkError;
+    await expect(err.retry()).rejects.toMatchObject({ code: 'conflict' });
+    expect(master!.every((b) => b === 0)).toBe(true);
   });
 
   it('a 4xx body error is thrown as-is without a retry', async () => {
