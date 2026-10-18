@@ -27,6 +27,8 @@ export interface TabState {
   refresh(): void;
 }
 
+const RATE_LIMIT_BACKOFF_MS = 60_000;
+
 const client = new ApiClient(config.apiUrl);
 
 export function useTab(session: Session, intervalMs: number): TabState {
@@ -41,7 +43,7 @@ export function useTab(session: Session, intervalMs: number): TabState {
     };
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<number | void> => {
     try {
       const view = await client.getTab(session.tabId, session.token);
       if (opened.current?.b64 !== view.blob) {
@@ -55,13 +57,16 @@ export function useTab(session: Session, intervalMs: number): TabState {
         setState((s) => ({ ...s, error: new ApiRequestError(0, 'invalid_blob', e.message) }));
       } else if (e instanceof ApiRequestError && e.status >= 400 && e.status < 500) {
         setState((s) => ({ ...s, error: e }));
+        if (e.status === 429) return RATE_LIMIT_BACKOFF_MS;
       } else {
         setState((s) => ({ ...s, stale: true }));
       }
     }
   }, [session]);
 
-  usePolling(load, intervalMs, true);
+  // 404 and an unreadable blob will not fix themselves: stop. 429: the limit is per minute, back off.
+  const terminal = state.error?.status === 404 || state.error?.code === 'invalid_blob';
+  usePolling(load, intervalMs, !terminal);
 
   return { ...state, refresh: () => void load() };
 }

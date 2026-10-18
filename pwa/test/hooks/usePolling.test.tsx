@@ -40,16 +40,17 @@ describe('usePolling', () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it('applies a changed interval at the next tick', async () => {
+  it('applies a changed interval to the next wait', async () => {
     const fn = vi.fn(async () => {});
     const { rerender } = renderHook(({ ms }) => usePolling(fn, ms, true), { initialProps: { ms: 1000 } });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(fn).toHaveBeenCalledTimes(2);
     rerender({ ms: 5000 });
-    expect(fn).toHaveBeenCalledTimes(1);
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(fn).toHaveBeenCalledTimes(2);
-    await act(() => vi.advanceTimersByTimeAsync(4000));
-    expect(fn).toHaveBeenCalledTimes(2);
-    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await act(() => vi.advanceTimersByTimeAsync(1000)); // wait already scheduled at 1000
     expect(fn).toHaveBeenCalledTimes(3);
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    expect(fn).toHaveBeenCalledTimes(3);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(fn).toHaveBeenCalledTimes(4);
   });
 });

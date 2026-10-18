@@ -39,6 +39,7 @@ async function mount() {
 beforeEach(async () => {
   vi.resetModules();
   wasm.state = 'ready';
+  document.title = 'ZTab';
   blobB64 = toBase64(await sealBlob(await importBlobKey(keyBytes), BLOB));
   vi.stubGlobal('fetch', vi.fn(async () => json(200, view())));
   window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
@@ -134,10 +135,72 @@ describe('TabEntry', () => {
     }
   });
 
+  it('any key derivation failure renders Incomplete and removes the hash', async () => {
+    vi.doMock('../../src/tab/keys.ts', async (orig) => ({
+      ...(await orig<typeof import('../../src/tab/keys.ts')>()),
+      sessionFromFragment: async () => {
+        throw new Error('boom');
+      },
+    }));
+    try {
+      await mount();
+      expect(await screen.findByText('This link is incomplete')).toBeInTheDocument();
+      expect(window.location.hash).toBe('');
+    } finally {
+      vi.doUnmock('../../src/tab/keys.ts');
+    }
+  });
+
   it('never changes document.title', async () => {
-    document.title = 'ZTab';
     await mount();
     await screen.findByText(/participant/i);
     expect(document.title).toBe('ZTab');
+  });
+
+  describe('polling after errors', () => {
+    const e404 = () => json(404, { error: { code: 'not_found', message: 'x' } });
+    const e429 = () => json(429, { error: { code: 'rate_limited', message: 'x' } });
+
+    it('404 stops polling; 429 backs off to 60 s', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const f404 = vi.fn(async () => e404());
+        vi.stubGlobal('fetch', f404);
+        const r = await mount();
+        await screen.findByText('This tab does not exist or the link is wrong.');
+        await vi.advanceTimersByTimeAsync(60000);
+        expect(f404).toHaveBeenCalledTimes(1);
+        r.unmount();
+
+        vi.resetModules();
+        window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+        const f429 = vi.fn(async () => e429());
+        vi.stubGlobal('fetch', f429);
+        await mount();
+        await screen.findByText('Too many requests from your network, wait a minute.');
+        await vi.advanceTimersByTimeAsync(50000);
+        expect(f429).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(11000);
+        expect(f429).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+});
+
+describe('useTab refresh', () => {
+  it('refresh after a 404 issues a new fetch', async () => {
+    const f = vi.fn(async () => json(404, { error: { code: 'not_found', message: 'x' } }));
+    vi.stubGlobal('fetch', f);
+    const { useTab } = await import('../../src/hooks/useTab.ts');
+    const { sessionFromFragment } = await import('../../src/tab/keys.ts');
+    const session = await sessionFromFragment(tabId, `p=1.${toBase64Url(keyBytes)}`, window.location.origin);
+    const { renderHook, act } = await import('@testing-library/react');
+    const { result } = renderHook(() => useTab(session, 10000));
+    await waitFor(() => expect(result.current.error?.status).toBe(404));
+    expect(f).toHaveBeenCalledTimes(1);
+    await act(async () => result.current.refresh());
+    expect(f).toHaveBeenCalledTimes(2);
   });
 });

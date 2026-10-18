@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router';
-import { CryptoError } from '@ztab/crypto';
 import { ErrorScreen } from '../components/ErrorScreen.tsx';
 import { StaleBanner } from '../components/StaleBanner.tsx';
 import { useTab } from '../hooks/useTab.ts';
@@ -31,10 +30,7 @@ function resolveSession(tabId: string): Promise<Session | null> {
       sessionStore.set(s);
       return s;
     })
-    .catch((e: unknown) => {
-      if (e instanceof CryptoError) return null;
-      throw e;
-    })
+    .catch(() => null) // any derivation failure reads as an unusable link
     .finally(() => inflight.delete(tabId));
   inflight.set(tabId, p);
   return p;
@@ -51,7 +47,10 @@ export function TabEntry() {
   useEffect(() => {
     if (!secure) return;
     let alive = true;
-    resolveSession(tabId).then((session) => alive && setResolved({ tabId, session }));
+    resolveSession(tabId).then(
+      (session) => alive && setResolved({ tabId, session }),
+      () => alive && setResolved({ tabId, session: null }),
+    );
     return () => {
       alive = false;
     };

@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * Calls `fn` at once when `enabled`, then every `intervalMs`. A tick is skipped while the
- * previous call is still pending. A changed `intervalMs` applies from the next tick.
+ * Calls `fn` at once when `enabled`, then `intervalMs` after each call settles (never overlapping).
+ * A changed `intervalMs` applies from the next wait; if `fn` resolves to a number, that is the next
+ * wait instead (back-off).
  */
-export function usePolling(fn: () => Promise<unknown>, intervalMs: number, enabled: boolean): void {
+export function usePolling(fn: () => Promise<number | void>, intervalMs: number, enabled: boolean): void {
   const fnRef = useRef(fn);
   const msRef = useRef(intervalMs);
   fnRef.current = fn;
@@ -13,28 +14,21 @@ export function usePolling(fn: () => Promise<unknown>, intervalMs: number, enabl
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    let pending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const run = async () => {
-      if (!pending) {
-        pending = true;
-        try {
-          await fnRef.current();
-        } catch {
-          // fn reports its own failures; the loop must survive them.
-        } finally {
-          pending = false;
-        }
+    // The next tick is scheduled when the current call settles, so a slow call never overlaps
+    // itself and an interval (or a failure-driven back-off) set meanwhile applies to the next wait.
+    const loop = async () => {
+      let wait = msRef.current;
+      try {
+        const next = await fnRef.current();
+        if (typeof next === 'number') wait = next;
+      } catch {
+        // fn reports its own failures; the loop must survive them.
       }
+      if (!cancelled) timer = setTimeout(() => void loop(), wait);
     };
-    const tick = () => {
-      if (cancelled) return;
-      void run();
-      timer = setTimeout(tick, msRef.current);
-    };
-    void run();
-    timer = setTimeout(tick, msRef.current);
+    void loop();
     return () => {
       cancelled = true;
       clearTimeout(timer);
