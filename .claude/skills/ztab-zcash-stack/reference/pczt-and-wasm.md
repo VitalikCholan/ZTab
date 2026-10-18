@@ -45,3 +45,6 @@ zcash:utest1...<participant diversified UA>?amount=0.01234567&message=Dinner%20a
 - `message` and `label` are percent-encoded; `memo` would be base64url without padding (≤ 512 bytes) and is only valid with a shielded address.
 - Ironwood changes nothing here: the address is a normal UA with an Orchard receiver; the sending wallet picks the Ironwood pool.
 - Render the same string as a QR for desktop; on mobile use it as the `href`.
+
+## Recipient comparison in the browser (added 2026-10-18, PWA subproject)
+`inspectPczt` re-encodes every output as an **Orchard-only** UA, while a real wallet UA (Zingo, Vizor) carries Orchard + Sapling + transparent receivers — so never compare the withdraw address with an output by string. Use `canonicalRecipient(network, address)` from `@ztab/crypto` (returns the Orchard-only UA, same error as `validateRecipient`) and compare that. The PWA also caps the fee locally (`MAX_FEE_ZAT = 500 000`) because the server summary comes from the same untrusted watcher as the PCZT, and enables **Withdraw to my wallet** only when every unspent note has ≥ 10 confirmations: the watcher sweeps everything-or-nothing and answers 409 while any note is younger.
