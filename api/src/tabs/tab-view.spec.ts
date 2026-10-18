@@ -29,6 +29,13 @@ const watcher: WatcherTab = {
     { index: 0, address: 'addr0', payments: [], status_facts: facts(5) },
     { index: 1, address: 'addr1', payments: [], status_facts: facts(7) },
   ],
+  balance: {
+    spendable_zat: 10,
+    pending_zat: 2,
+    swept_zat: 3,
+    min_unspent_confirmations: 4,
+    extra: 'x',
+  } as never,
 };
 const blob = Buffer.from('hello');
 
@@ -126,5 +133,27 @@ describe('buildTabView', () => {
     expect(all.participants.map((p) => p.index)).toEqual([0, 1]);
     expect(all.participants[0].status_facts).toBeNull();
     expect(JSON.stringify(all)).not.toContain('leak');
+  });
+
+  it('admin and group carry balance, picked to the four fields', () => {
+    for (const kind of ['admin', 'group'] as const) {
+      const v = buildTabView(tab, addresses, blob, { kind }, watcher);
+      expect(v.balance).toEqual({
+        spendable_zat: 10,
+        pending_zat: 2,
+        swept_zat: 3,
+        min_unspent_confirmations: 4,
+      });
+    }
+  });
+
+  it('participant view has no balance key', () => {
+    const v = buildTabView(tab, addresses, blob, { kind: 'participant', index: 0 }, watcher);
+    expect('balance' in v).toBe(false);
+  });
+
+  it('no balance key when the watcher is down', () => {
+    const v = buildTabView(tab, addresses, blob, { kind: 'admin' }, null);
+    expect('balance' in v).toBe(false);
   });
 });

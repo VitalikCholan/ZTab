@@ -40,6 +40,7 @@ The entrypoint runs `prisma migrate deploy`, then `node dist/src/main.js` as the
 | `PORT` | no | `3000` | Listen port |
 | `RATE_LIMIT_CREATE_PER_HOUR` | no | `10` | `PUT /tabs` budget per client IP per hour (positive integer) |
 | `RATE_LIMIT_DEFAULT_PER_MINUTE` | no | `120` | Budget for every other route per client IP per minute (positive integer) |
+| `RATE_URL` | no | CoinGecko simple-price URL for ZEC/USD | Upstream for `GET /rate`; must answer `{"zcash":{"usd":<number>}}` |
 | `ZTAB_DISABLE_CRON` | no | unset | Tests only: disables the archive and purge cron jobs. Never set it in production |
 
 ## Endpoints
@@ -47,12 +48,15 @@ The entrypoint runs `prisma migrate deploy`, then `node dist/src/main.js` as the
 | Route | Auth | Purpose |
 |---|---|---|
 | `PUT /tabs/:tab_id` | none | Create a tab (201), or retry it (200) |
-| `GET /tabs/:tab_id` | any role | Role-scoped tab view with watcher facts |
+| `GET /tabs/:tab_id` | any role | Role-scoped tab view with watcher facts; admin and group also get `balance` (`spendable_zat`, `pending_zat`, `swept_zat`, `min_unspent_confirmations`), participants never do |
 | `POST /tabs/:tab_id/sweep` | admin | Proxy: build the sweep PCZT |
 | `POST /tabs/:tab_id/broadcast` | admin | Proxy: broadcast the signed PCZT |
-| `GET /tabs/:tab_id/sweep` | admin | Proxy: sweep status |
+| `GET /tabs/:tab_id/sweep` | admin | Proxy: sweep status, plus `history` of sweeps (newest first: `txid`, `output_zat`, `fee_zat`, `mined_height`, `confirmations`) |
+| `GET /rate` | none | USD per ZEC (`usd_per_zec`, `fetched_at`, `source`), cached 60 s; `503 rate_unavailable` when the upstream fails or takes over 5 s |
 | `GET /status` | none | Network and watcher health, nothing about tabs |
 | `GET /healthz` | none | Liveness: `200` and the version |
+
+Purge rule: a tab nobody opens for 30 days (`last_access_at`), in any state, is deleted; links stop working and funds that arrive later stay on the tab key. `closed_at` is informational only.
 
 Auth is `Authorization: Bearer <base64url(token)>`. Missing token is 401; an unknown tab and a token that is not that tab's both give an identical 404; the right tab with the wrong role is 403. Errors are `{"error":{"code","message"}}`.
 

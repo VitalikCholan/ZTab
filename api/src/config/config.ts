@@ -11,6 +11,7 @@ export interface Config {
   port: number;
   rateLimitCreatePerHour: number;
   rateLimitDefaultPerMinute: number;
+  rateUrl: string;
 }
 
 const schema = z.object({
@@ -22,6 +23,10 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   RATE_LIMIT_CREATE_PER_HOUR: z.coerce.number().int().min(1).default(10),
   RATE_LIMIT_DEFAULT_PER_MINUTE: z.coerce.number().int().min(1).default(120),
+  RATE_URL: z
+    .string()
+    .min(1)
+    .default('https://api.coingecko.com/api/v3/simple/price?ids=zcash&vs_currencies=usd'),
 });
 
 /** Parses and validates the environment; throws naming the offending variables. */
@@ -43,5 +48,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     port: v.PORT,
     rateLimitCreatePerHour: v.RATE_LIMIT_CREATE_PER_HOUR,
     rateLimitDefaultPerMinute: v.RATE_LIMIT_DEFAULT_PER_MINUTE,
+    rateUrl: v.RATE_URL,
   };
 }

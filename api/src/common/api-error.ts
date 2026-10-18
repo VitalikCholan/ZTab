@@ -7,6 +7,7 @@ export type ApiErrorCode =
   | 'rate_limited'
   | 'watcher_unavailable'
   | 'watcher_rejected'
+  | 'rate_unavailable'
   | 'internal';
 
 /** Error with an HTTP status and a stable machine code (spec §6). */

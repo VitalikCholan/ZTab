@@ -41,9 +41,9 @@ export class LifecycleService implements OnModuleInit {
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
-  async purgeClosedJob(): Promise<void> {
+  async purgeInactiveJob(): Promise<void> {
     try {
-      await this.purgeClosed(new Date());
+      await this.purgeInactive(new Date());
     } catch (err) {
       this.logger.error(`purge run failed: ${errorLabel(err)}`);
     }
@@ -135,22 +135,23 @@ export class LifecycleService implements OnModuleInit {
   }
 
   /**
-   * Delete tabs closed more than 30 days ago. Children go via ON DELETE
+   * Delete tabs nobody has opened for 30 days, in any state (`closedAt` is
+   * informational only). Children go via ON DELETE
    * CASCADE, so each delete is a single atomic statement.
    */
-  async purgeClosed(now: Date, batchSize = BATCH_SIZE): Promise<number> {
+  async purgeInactive(now: Date, batchSize = BATCH_SIZE): Promise<number> {
     const cutoff = new Date(now.getTime() - PURGE_AFTER_MS);
     let purged = 0;
     for (;;) {
       const batch = await this.prisma.tab.findMany({
-        where: { closedAt: { lt: cutoff } },
+        where: { lastAccessAt: { lt: cutoff } },
         select: { id: true },
         orderBy: { id: 'asc' },
         take: batchSize,
       });
       if (batch.length === 0) break;
       const { count } = await this.prisma.tab.deleteMany({
-        where: { id: { in: batch.map((t) => t.id) }, closedAt: { lt: cutoff } },
+        where: { id: { in: batch.map((t) => t.id) }, lastAccessAt: { lt: cutoff } },
       });
       purged += count;
       if (batch.length < batchSize) break;

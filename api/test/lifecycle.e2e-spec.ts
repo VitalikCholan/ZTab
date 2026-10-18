@@ -164,7 +164,7 @@ describe('lifecycle', () => {
       expect(tab.closedAt).toEqual(now);
     });
 
-    it('records closed tabs with closed_at so purge removes them later', async () => {
+    it('records closed tabs with closed_at; purge later removes them once idle', async () => {
       const id = await seed({ lastAccessAt: ago(8 * DAY) });
       stub.setTab(id, { state: 'closed' });
       expect(await lifecycle.archiveIdle(now)).toBe(0);
@@ -173,7 +173,7 @@ describe('lifecycle', () => {
       expect(tab.lastKnownState).toBe('closed');
       expect(tab.closedAt).toEqual(now);
       expect(stub.callsTo('setActive')).toHaveLength(0);
-      expect(await lifecycle.purgeClosed(new Date(now.getTime() + 31 * DAY))).toBe(1);
+      expect(await lifecycle.purgeInactive(new Date(now.getTime() + 31 * DAY))).toBe(1);
       expect(await prisma.tab.count({ where: { id } })).toBe(0);
     });
 
@@ -208,9 +208,9 @@ describe('lifecycle', () => {
     it('catch errors from the runs', async () => {
       const err = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
       const a = jest.spyOn(lifecycle, 'archiveIdle').mockRejectedValueOnce(new Error('db down'));
-      const p = jest.spyOn(lifecycle, 'purgeClosed').mockRejectedValueOnce(new Error('db down'));
+      const p = jest.spyOn(lifecycle, 'purgeInactive').mockRejectedValueOnce(new Error('db down'));
       await expect(lifecycle.archiveIdleJob()).resolves.toBeUndefined();
-      await expect(lifecycle.purgeClosedJob()).resolves.toBeUndefined();
+      await expect(lifecycle.purgeInactiveJob()).resolves.toBeUndefined();
       expect(err).toHaveBeenCalledTimes(2);
       expect(String(err.mock.calls[0][0])).toContain('Error');
       expect(String(err.mock.calls[0][0])).not.toContain('db down');
@@ -220,32 +220,42 @@ describe('lifecycle', () => {
     });
   });
 
-  describe('purgeClosed', () => {
+  describe('purgeInactive', () => {
     it('purges across several batches', async () => {
-      for (let i = 0; i < 5; i++) await seed({ lastKnownState: 'closed', closedAt: ago(40 * DAY) });
-      expect(await lifecycle.purgeClosed(now, 2)).toBe(5);
+      for (let i = 0; i < 5; i++) await seed({ lastAccessAt: ago(40 * DAY) });
+      expect(await lifecycle.purgeInactive(now, 2)).toBe(5);
       expect(await prisma.tab.count()).toBe(0);
     });
 
-    it('deletes a tab closed 31 days ago with all its rows', async () => {
-      const id = await seed({ lastKnownState: 'closed', closedAt: ago(31 * DAY) });
-      expect(await lifecycle.purgeClosed(now)).toBe(1);
+    it('deletes a tab idle for 31 days with all its rows', async () => {
+      const id = await seed({ lastAccessAt: ago(31 * DAY) });
+      expect(await lifecycle.purgeInactive(now)).toBe(1);
       expect(await prisma.tab.count({ where: { id } })).toBe(0);
       expect(await prisma.tabAddress.count()).toBe(0);
       expect(await prisma.tabBlob.count()).toBe(0);
       expect(await prisma.tabToken.count()).toBe(0);
     });
 
-    it('keeps a tab closed 29 days ago', async () => {
-      const id = await seed({ lastKnownState: 'closed', closedAt: ago(29 * DAY) });
-      expect(await lifecycle.purgeClosed(now)).toBe(0);
+    it('purges an open tab idle for 31 days', async () => {
+      await seed({ lastKnownState: 'open', lastAccessAt: ago(31 * DAY) });
+      expect(await lifecycle.purgeInactive(now)).toBe(1);
+    });
+
+    it('keeps a tab idle for 29 days', async () => {
+      const id = await seed({ lastAccessAt: ago(29 * DAY) });
+      expect(await lifecycle.purgeInactive(now)).toBe(0);
       expect(await prisma.tab.count({ where: { id } })).toBe(1);
       expect(await prisma.tabToken.count()).toBe(1);
     });
 
-    it('keeps tabs that never closed', async () => {
-      await seed({ lastAccessAt: ago(90 * DAY) });
-      expect(await lifecycle.purgeClosed(now)).toBe(0);
+    it('keeps a closed tab (closed 40 days ago) that was accessed yesterday', async () => {
+      const id = await seed({
+        lastKnownState: 'closed',
+        closedAt: ago(40 * DAY),
+        lastAccessAt: ago(1 * DAY),
+      });
+      expect(await lifecycle.purgeInactive(now)).toBe(0);
+      expect(await prisma.tab.count({ where: { id } })).toBe(1);
     });
   });
 });

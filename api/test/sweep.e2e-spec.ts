@@ -174,10 +174,30 @@ describe('sweep proxy', () => {
   });
 
   it('GET sweep returns the watcher status', async () => {
-    const st = { state: 'sweeping', txid: 'cc'.repeat(32), mined_height: null, confirmations: 0 };
+    const st = { state: 'sweeping', txid: 'cc'.repeat(32), mined_height: null, confirmations: 0, history: [] };
     stub.setSweepStatus(id, st as never);
     const res = await status(admin).expect(200);
     expect(res.body).toEqual(st);
+  });
+
+  it('GET sweep passes history through, fields picked', async () => {
+    const entry = {
+      txid: 'dd'.repeat(32),
+      output_zat: 90000,
+      fee_zat: 10000,
+      mined_height: 120,
+      confirmations: 4,
+    };
+    stub.setSweepStatus(id, {
+      state: 'closed',
+      txid: entry.txid,
+      mined_height: 120,
+      confirmations: 4,
+      history: [{ ...entry, secret: 'leak' }],
+    } as never);
+    const res = await status(admin).expect(200);
+    expect(res.body.history).toEqual([entry]);
+    expect(res.text).not.toContain('leak');
   });
 
   it('rejects invalid bodies with 400 validation', async () => {

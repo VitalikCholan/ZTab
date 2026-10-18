@@ -33,6 +33,23 @@ export interface WatcherTab {
   tip_height: number;
   stale: boolean;
   participants: WatcherParticipant[];
+  /** Present on current watchers; absent from older ones. */
+  balance?: WatcherBalance;
+}
+
+export interface WatcherBalance {
+  spendable_zat: number;
+  pending_zat: number;
+  swept_zat: number;
+  min_unspent_confirmations: number | null;
+}
+
+export interface WatcherSweepHistoryEntry {
+  txid: string;
+  output_zat: number;
+  fee_zat: number;
+  mined_height: number | null;
+  confirmations: number;
 }
 
 export interface WatcherRegisterBody {
@@ -77,6 +94,8 @@ export interface WatcherSweepStatus {
   txid: string | null;
   mined_height: number | null;
   confirmations: number;
+  /** Newest first. */
+  history?: WatcherSweepHistoryEntry[];
 }
 
 export interface WatcherHealth {
