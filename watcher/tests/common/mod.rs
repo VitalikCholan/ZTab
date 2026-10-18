@@ -108,6 +108,7 @@ pub async fn register_fixture_tab(
             participants_count: participants,
             state: TabState::Open,
             created_at: time::OffsetDateTime::now_utc(),
+            active: true,
         })
         .unwrap();
     // Persist the participant addresses, as registration does.
@@ -179,6 +180,7 @@ pub async fn import_fixture_tab_offline(state: &ztab_watcher::http::AppState, pa
             participants_count: participants,
             state: TabState::Open,
             created_at: time::OffsetDateTime::now_utc(),
+            active: true,
         })
         .unwrap();
     // Persist the participant addresses, as registration does.

@@ -45,6 +45,9 @@ pub struct TabRow {
     pub participants_count: u32,
     pub state: TabState,
     pub created_at: OffsetDateTime,
+    /// False while the tab is paused: it is left out of `open_tabs()` and so of every
+    /// background loop. Independent of `state`.
+    pub active: bool,
 }
 
 /// A mempool sighting: a hint that a not-yet-mined tx pays a participant address.
@@ -74,7 +77,8 @@ const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS tabs (
   tab_id TEXT PRIMARY KEY, account_uuid TEXT NOT NULL UNIQUE, ufvk TEXT NOT NULL,
   birthday INTEGER NOT NULL, participants_count INTEGER NOT NULL,
-  state TEXT NOT NULL, created_at TEXT NOT NULL
+  state TEXT NOT NULL, created_at TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS mempool_sightings (
   txid TEXT NOT NULL, tab_id TEXT NOT NULL, participant_index INTEGER NOT NULL,
@@ -115,6 +119,7 @@ impl MetaStore {
         conn.execute_batch(SCHEMA)
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         drop_offered_pczts(&conn)?;
+        add_active_column(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -123,8 +128,8 @@ impl MetaStore {
     pub fn insert_tab(&self, t: &TabRow) -> Result<(), WatcherError> {
         let created_at = rfc3339(t.created_at)?;
         self.conn().execute(
-            "INSERT INTO tabs (tab_id, account_uuid, ufvk, birthday, participants_count, state, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![t.tab_id.to_string(), t.account_uuid.to_string(), t.ufvk, t.birthday, t.participants_count, t.state.as_str(), created_at],
+            "INSERT INTO tabs (tab_id, account_uuid, ufvk, birthday, participants_count, state, created_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![t.tab_id.to_string(), t.account_uuid.to_string(), t.ufvk, t.birthday, t.participants_count, t.state.as_str(), created_at, t.active],
         ).map_err(|e| WatcherError::Wallet(e.to_string()))?;
         Ok(())
     }
@@ -132,10 +137,10 @@ impl MetaStore {
     pub fn get_tab(&self, tab_id: Uuid) -> Result<Option<TabRow>, WatcherError> {
         // Raw column values are read under the lock; decoding and validation happen after
         // it is released, so corrupt stored data can neither panic nor poison the mutex.
-        type Raw = (String, String, String, u32, u32, String, String);
+        type Raw = (String, String, String, u32, u32, String, String, bool);
         let raw: Option<Raw> = self.conn()
             .query_row(
-                "SELECT tab_id, account_uuid, ufvk, birthday, participants_count, state, created_at FROM tabs WHERE tab_id = ?1",
+                "SELECT tab_id, account_uuid, ufvk, birthday, participants_count, state, created_at, active FROM tabs WHERE tab_id = ?1",
                 params![tab_id.to_string()],
                 |r| {
                     Ok((
@@ -146,13 +151,14 @@ impl MetaStore {
                         r.get(4)?,
                         r.get(5)?,
                         r.get(6)?,
+                        r.get(7)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         raw.map(
-            |(id, acct, ufvk, birthday, participants_count, state, created)| {
+            |(id, acct, ufvk, birthday, participants_count, state, created, active)| {
                 Ok(TabRow {
                     tab_id: parse_uuid("tab_id", &id)?,
                     account_uuid: parse_uuid("account_uuid", &acct)?,
@@ -165,6 +171,7 @@ impl MetaStore {
                         ))
                     })?,
                     created_at: parse_rfc3339(&created)?,
+                    active,
                 })
             },
         )
@@ -179,6 +186,18 @@ impl MetaStore {
             )
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         Ok(())
+    }
+
+    /// Pauses (`false`) or resumes (`true`) a tab. Returns `false` when no such tab exists.
+    pub fn set_active(&self, tab_id: Uuid, active: bool) -> Result<bool, WatcherError> {
+        let n = self
+            .conn()
+            .execute(
+                "UPDATE tabs SET active = ?2 WHERE tab_id = ?1",
+                params![tab_id.to_string(), active],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(n > 0)
     }
 
     /// Stores the tab's participant addresses (index, encoded address), replacing any
@@ -387,7 +406,7 @@ impl MetaStore {
     pub fn open_tabs(&self) -> Result<Vec<TabRow>, WatcherError> {
         let conn = self.conn();
         let mut st = conn
-            .prepare("SELECT tab_id FROM tabs WHERE state IN ('open','sweeping')")
+            .prepare("SELECT tab_id FROM tabs WHERE state IN ('open','sweeping') AND active = 1")
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         let ids: Vec<String> = st
             .query_map([], |r| r.get(0))
@@ -405,6 +424,22 @@ impl MetaStore {
         }
         Ok(tabs)
     }
+}
+
+/// Databases created before tabs could be paused lack the `active` column.
+fn add_active_column(conn: &Connection) -> Result<(), WatcherError> {
+    let has_column: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tabs') WHERE name = 'active'",
+            [],
+            |r| r.get::<_, i64>(0).map(|n| n > 0),
+        )
+        .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+    if !has_column {
+        conn.execute_batch("ALTER TABLE tabs ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Databases created before the PCZT stopped being stored at rest carry a `pczt_b64`
@@ -467,6 +502,7 @@ mod tests {
             created_at: time::OffsetDateTime::now_utc()
                 .replace_nanosecond(0)
                 .unwrap(),
+            active: true,
         }
     }
 
@@ -623,6 +659,54 @@ mod tests {
         let mut want = vec![rows[0].tab_id, rows[1].tab_id];
         want.sort();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn open_tabs_excludes_inactive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let (a, b) = (row(TabState::Open), row(TabState::Open));
+        store.insert_tab(&a).unwrap();
+        store.insert_tab(&b).unwrap();
+        assert!(store.set_active(a.tab_id, false).unwrap());
+        let ids = |s: &MetaStore| {
+            let mut v: Vec<Uuid> = s.open_tabs().unwrap().iter().map(|t| t.tab_id).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(ids(&store), vec![b.tab_id]);
+        assert!(!store.get_tab(a.tab_id).unwrap().unwrap().active);
+        assert!(store.set_active(a.tab_id, true).unwrap());
+        let mut want = vec![a.tab_id, b.tab_id];
+        want.sort();
+        assert_eq!(ids(&store), want);
+        assert!(!store.set_active(Uuid::new_v4(), false).unwrap());
+    }
+
+    #[test]
+    fn active_column_is_added_to_old_databases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ztab.sqlite");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE tabs (tab_id TEXT PRIMARY KEY, account_uuid TEXT NOT NULL UNIQUE, ufvk TEXT NOT NULL,
+                   birthday INTEGER NOT NULL, participants_count INTEGER NOT NULL,
+                   state TEXT NOT NULL, created_at TEXT NOT NULL);
+                 INSERT INTO tabs VALUES ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', 'u', 1, 2, 'open', '2026-10-15T00:00:00Z');",
+            )
+            .unwrap();
+        }
+        let store = MetaStore::open_at(&path).unwrap();
+        let old = store
+            .get_tab("00000000-0000-0000-0000-000000000001".parse().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(old.active);
+        let r = row(TabState::Open);
+        store.insert_tab(&r).unwrap();
+        assert!(store.get_tab(r.tab_id).unwrap().unwrap().active);
+        assert_eq!(store.open_tabs().unwrap().len(), 2);
     }
 
     #[test]

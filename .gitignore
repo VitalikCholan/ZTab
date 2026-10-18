@@ -8,6 +8,7 @@ build/
 # secrets and wallets
 *.env
 .env.*
+!.env.example
 identity.txt
 mnemonic.txt
 *.pczt

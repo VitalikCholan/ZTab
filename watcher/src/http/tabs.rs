@@ -88,6 +88,7 @@ pub async fn register(
         participants_count: body.participants_count,
         state: TabState::Open,
         created_at: time::OffsetDateTime::now_utc(),
+        active: true,
     };
     state.meta.insert_tab(&tab)?;
     drop(client);
@@ -111,6 +112,25 @@ fn existing_registration(
     }
     let addresses = crate::facts::ensure_tab_addresses(&state.wallet, &state.meta, &existing)?;
     Ok(Some(out(body.tab_id, addresses)))
+}
+
+#[derive(Deserialize)]
+pub struct SetActive {
+    pub active: bool,
+}
+
+/// Pauses (`false`) or resumes (`true`) a tab. A paused tab is skipped by the mempool loop,
+/// fact refresh and sweep advancement; its stored `state` is untouched.
+pub async fn set_active(
+    State(state): State<AppState>,
+    Path(tab_id): Path<Uuid>,
+    Json(body): Json<SetActive>,
+) -> Result<StatusCode, WatcherError> {
+    if !state.meta.set_active(tab_id, body.active)? {
+        return Err(WatcherError::NotFound(format!("tab {tab_id}")));
+    }
+    tracing::info!(tab = %tab_id, active = body.active, "tab active flag set");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Serves facts from the databases and health atomics only; never touches the lightwalletd

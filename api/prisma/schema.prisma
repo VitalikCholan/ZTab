@@ -1,0 +1,84 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Mode {
+  group
+  individual
+
+  @@map("mode")
+}
+
+enum BlobRole {
+  admin
+  group
+  participant
+
+  @@map("blob_role")
+}
+
+model Tab {
+  id                String    @id @db.Uuid
+  mode              Mode
+  participantsCount Int       @map("participants_count")
+  ufvk              String
+  birthday          Int
+  network           String
+  paused            Boolean   @default(false)
+  lastKnownState    String    @default("open") @map("last_known_state")
+  lastKnownAt       DateTime? @map("last_known_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastAccessAt      DateTime  @default(now()) @map("last_access_at") @db.Timestamptz(3)
+  closedAt          DateTime? @map("closed_at") @db.Timestamptz(3)
+
+  addresses TabAddress[]
+  blobs     TabBlob[]
+  tokens    TabToken[]
+
+  @@map("tabs")
+}
+
+model TabAddress {
+  tabId   String @map("tab_id") @db.Uuid
+  index   Int
+  address String
+  tab     Tab    @relation(fields: [tabId], references: [id], onDelete: Cascade)
+
+  @@id([tabId, index])
+  @@map("tab_addresses")
+}
+
+model TabBlob {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  tabId      String   @map("tab_id") @db.Uuid
+  role       BlobRole
+  index      Int?
+  ciphertext Bytes
+  tab        Tab      @relation(fields: [tabId], references: [id], onDelete: Cascade)
+
+  // The database index is UNIQUE NULLS NOT DISTINCT (see migration
+  // null_index_unique): admin and group rows have a NULL index and must still
+  // be unique per tab. The @@unique here only gives the client the compound key.
+  @@unique([tabId, role, index])
+  @@map("tab_blobs")
+}
+
+model TabToken {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  tabId     String   @map("tab_id") @db.Uuid
+  role      BlobRole
+  index     Int?
+  tokenHash Bytes    @unique @map("token_hash")
+  tab       Tab      @relation(fields: [tabId], references: [id], onDelete: Cascade)
+
+  // NULLS NOT DISTINCT in the database, like tab_blobs above.
+  @@unique([tabId, role, index])
+  @@map("tab_tokens")
+}

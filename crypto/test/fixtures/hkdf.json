@@ -7,5 +7,15 @@
   "participantKeyHex": {
     "0": "3688efa0c994d62a5d2e6d6ee347faa65d9051a50bfe665e5f28362b17f0e99d",
     "1": "8f5a3c475de1bca24172838d8f7f274eeb25241a44a471dc8c8ca332763a2b36"
+  },
+  "tokenHex": {
+    "admin": "cddeb4634675bb6ee8fcce45dca1d365a813d5485d92a63c3e75b810e32116ee",
+    "group": "59fdda9ffc9c328cd78b9e8884170112b2211f43413ed0e612a39ef6241b5adb",
+    "participant0": "188e46abc89e4cd69cfe553ca7299362c3f749c1e2c7e1e21d08f2470e941109"
+  },
+  "tokenHashHex": {
+    "admin": "8ee801fb6535b8011d06060db54a7fffa8e264a6806721f7e0e0dad11a73a2f5",
+    "group": "0987838aa3671f5cfc8089762b0c594f77b8cf4045d4806cf90775a1e93f92da",
+    "participant0": "cb7af4fc468b91a2a97074c3d441d3cdbcb09c250255cc3528bdf83c83b69861"
   }
 }

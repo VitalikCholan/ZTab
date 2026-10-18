@@ -86,3 +86,67 @@ async fn tab_facts_do_not_wait_on_the_wallet_write_lock() {
     assert_eq!(participants.len(), 2);
     assert!(participants[1].address.starts_with("utest1"));
 }
+
+async fn call(
+    state: &ztab_watcher::http::AppState,
+    method: &str,
+    uri: &str,
+    token: bool,
+    body: Option<serde_json::Value>,
+) -> (u16, serde_json::Value) {
+    let mut b = axum::http::Request::builder().method(method).uri(uri);
+    if token {
+        b = b.header("Authorization", "Bearer test-token");
+    }
+    let req = match body {
+        Some(v) => b
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(v.to_string())),
+        None => b.body(axum::body::Body::empty()),
+    }
+    .unwrap();
+    let resp = ztab_watcher::http::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+#[tokio::test]
+async fn pause_and_resume_tab() {
+    let state = common::offline_state().await;
+    common::import_fixture_tab_offline(&state, 2).await;
+    let id = common::fixture_tab_id();
+    let uri = format!("/v1/tabs/{id}/active");
+    let get = format!("/v1/tabs/{id}");
+
+    let (s, tab) = call(&state, "GET", &get, true, None).await;
+    assert_eq!((s, &tab["active"]), (200, &serde_json::json!(true)));
+
+    let off = Some(serde_json::json!({"active": false}));
+    assert_eq!(call(&state, "PUT", &uri, true, off.clone()).await.0, 204);
+    let (_, tab) = call(&state, "GET", &get, true, None).await;
+    assert_eq!(tab["active"], false);
+    assert_eq!(tab["state"], "open");
+    assert!(state.meta.open_tabs().unwrap().is_empty());
+
+    let on = Some(serde_json::json!({"active": true}));
+    assert_eq!(call(&state, "PUT", &uri, true, on.clone()).await.0, 204);
+    let (_, tab) = call(&state, "GET", &get, true, None).await;
+    assert_eq!(tab["active"], true);
+    assert_eq!(state.meta.open_tabs().unwrap().len(), 1);
+
+    let unknown = format!("/v1/tabs/{}/active", uuid::Uuid::new_v4());
+    assert_eq!(call(&state, "PUT", &unknown, true, on.clone()).await.0, 404);
+    assert_eq!(
+        call(&state, "PUT", &uri, true, Some(serde_json::json!({})))
+            .await
+            .0,
+        422
+    );
+    assert_eq!(call(&state, "PUT", &uri, false, off).await.0, 401);
+}

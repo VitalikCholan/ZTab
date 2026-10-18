@@ -10,7 +10,7 @@ Design: `docs/superpowers/specs/2026-10-16-ztab-crypto-design.md`. Key model: wa
 ## Use
 
 ```ts
-import { createMaster, deriveTabKeys, deriveTabAccount, deriveAddress, loadWasm, sealBlob } from '@ztab/crypto';
+import { createMaster, deriveTabKeys, deriveTabAccount, deriveAddress, loadWasm, sealBlob, hashToken, encodeToken } from '@ztab/crypto';
 
 await loadWasm();                                   // browser: fetches pkg/ztab_crypto_bg.wasm
 const master = createMaster();
@@ -20,6 +20,9 @@ const { ufvk, orchardSk } = deriveTabAccount('test', keys.spendSeed);
 orchardSk.fill(0);                                  // not needed until closing
 const addresses = [0, 1, 2].map((i) => deriveAddress('test', ufvk, i));
 const adminBlob = await sealBlob(keys.admin, { title: 'Dinner', addresses /* … */ });
+// API access: send only hashes at creation, then the token itself as a Bearer value
+const adminHash = await hashToken(keys.tokens.admin);                  // 64 lowercase hex, sent once
+const bearer = `Bearer ${encodeToken(keys.tokens.admin)}`;             // base64url, no padding
 ```
 
 Closing: `inspectPczt` builds the confirmation screen from the PCZT itself, after binding every output's value and recipient to its note commitment; `signPczt` re-checks recipient, total and fee against what Alice confirmed, and that every payment output is encrypted so the recipient's wallet can decrypt it, and refuses before signing on any difference. See `scripts/sign-stdin.ts` for the full sequence.
