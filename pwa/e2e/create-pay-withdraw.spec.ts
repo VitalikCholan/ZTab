@@ -11,6 +11,7 @@ const expected = JSON.parse(readFileSync(new URL('expected.json', FIXTURES), 'ut
   feeZat: number;
   totalInZat: number;
   txid: string;
+  addresses: string[];
 };
 const PCZT_B64 = readFileSync(new URL('sweep.proved.pczt', FIXTURES)).toString('base64');
 
@@ -61,8 +62,18 @@ test.describe('desktop', { tag: '@desktop' }, () => {
   });
 
   /** Creates a tab whose watcher offers the fixture sweep, then opens the withdraw dialog. */
-  async function openWithdraw(page: Page, outputZat: number) {
-    const { tabId } = await createViaForm(page, { title: 'Dinner', total: '50.00', names: ['Alice', 'Bob'], mode: 'Group' });
+  async function openWithdraw(
+    page: Page,
+    outputZat: number,
+    opts: { address?: string; line?: string } = {},
+  ) {
+    const { tabId } = await createViaForm(page, {
+      title: 'Dinner',
+      total: '50.00',
+      names: ['Alice', 'Bob'],
+      mode: 'Group',
+      address: opts.address,
+    });
     await stub.patchTab(tabId, {
       balance: { spendable_zat: expected.outputZat, pending_zat: 0, swept_zat: 0, min_unspent_confirmations: 12 },
     });
@@ -79,7 +90,7 @@ test.describe('desktop', { tag: '@desktop' }, () => {
     await openAdminPage(page, tabId);
     await page.getByRole('button', { name: 'Withdraw to my wallet' }).click();
     const dialog = page.getByRole('dialog', { name: 'Withdraw to my wallet' });
-    await expect(dialog.getByText('Send 0.0199 ZEC to utest1ar2v…gwc4d (your address) · fee 0.0001 ZEC')).toBeVisible();
+    await expect(dialog.getByText(opts.line ?? 'Send 0.0199 ZEC to utest1ar2v…gwc4d (your address) · fee 0.0001 ZEC')).toBeVisible();
     expect(await stub.callsTo('sweep')).toHaveLength(1);
     return dialog;
   }
@@ -100,6 +111,20 @@ test.describe('desktop', { tag: '@desktop' }, () => {
     await expect(dialog.getByText(`Server says: ${zatToZecString(expected.outputZat + 1)} ZEC`)).toBeVisible();
     await expect(dialog.getByRole('alert')).toHaveText('The server proposed a different payment. Nothing was signed.');
     await expect(dialog.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    expect(await stub.callsTo('broadcast')).toEqual([]);
+  });
+
+  test('a PCZT paying another address: the screen shows that address as not yours, Confirm disabled', async ({ page }) => {
+    // A valid testnet UA (the fixture tab's own address 0) that is not the fixture PCZT's output.
+    const dialog = await openWithdraw(page, expected.outputZat, {
+      address: expected.addresses[0],
+      line: 'Send 0.0199 ZEC to utest1ar2v…gwc4d (not your address) · fee 0.0001 ZEC',
+    });
+    await expect(dialog.getByText('(your address)', { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('alert')).toHaveText('The server proposed a different payment. Nothing was signed.');
+    const confirm = dialog.getByRole('button', { name: 'Confirm' });
+    await expect(confirm).toBeDisabled();
+    await confirm.click({ force: true });
     expect(await stub.callsTo('broadcast')).toEqual([]);
   });
 });

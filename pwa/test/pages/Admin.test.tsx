@@ -1,6 +1,10 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadWasm } from '@ztab/crypto';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiRequestError } from '../../src/api/client.ts';
 import type { Balance, TabView } from '../../src/api/types.ts';
 import { config } from '../../src/config.ts';
@@ -18,6 +22,10 @@ const keys = vi.hoisted(() => ({ adminLinks: vi.fn() }));
 vi.mock('../../src/tab/keys.ts', () => keys);
 
 import { Admin } from '../../src/pages/Admin.tsx';
+
+// The withdraw dialog canonicalises the recipient through the wasm (see WithdrawDialog.test.tsx).
+const WASM = join(dirname(fileURLToPath(import.meta.url)), '../../../crypto/pkg/ztab_crypto_bg.wasm');
+beforeAll(() => loadWasm(new Uint8Array(readFileSync(WASM))));
 
 const SHARE_ZAT = 31250000; // $12.50 at $40/ZEC
 const NAMES = ['Alice', 'Bob', 'Carol', 'Dave'];
@@ -41,7 +49,7 @@ const session = { tabId: 't', role: 'admin', master, token: new Uint8Array(32), 
 const READY: Balance = { spendable_zat: 3 * SHARE_ZAT, pending_zat: 0, swept_zat: 50000000, min_unspent_confirmations: 12 };
 const PREPARED = {
   pczt: new Uint8Array(1),
-  inspected: { outputs: [{ address: 'utest1orchardonly', zat: 1990000 }], feeZat: 10000, totalInZat: 2000000, txid: TXID },
+  inspected: { outputs: [{ address: WITHDRAW, zat: 1990000 }], feeZat: 10000, totalInZat: 2000000, txid: TXID },
   serverSummary: { inputs_zat: 2000000, output_zat: 1990000, fee_zat: 10000, expiry_height: 1_000_000, txid: TXID },
   recipient: WITHDRAW,
   ok: true,

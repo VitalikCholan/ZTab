@@ -1,4 +1,4 @@
-import { CryptoError } from '@ztab/crypto';
+import { canonicalRecipient, CryptoError } from '@ztab/crypto';
 import { useState } from 'react';
 import { ApiRequestError } from '../api/client.ts';
 import type { SweepStatus } from '../api/types.ts';
@@ -37,6 +37,26 @@ function confirmationsOf(s: SweepStatus, txid: string): number {
   return s.history.find((h) => h.txid === txid)?.confirmations ?? 0;
 }
 
+/** The admin's withdraw address as an Orchard-only UA, the form PCZT outputs are printed in. */
+function ownOrchardAddress(recipient: string): string | null {
+  try {
+    return canonicalRecipient(config.network, recipient);
+  } catch {
+    return null; // nothing then reads as "your address"
+  }
+}
+
+function OutputAddress({ address, mine }: { address: string; mine: boolean }) {
+  return (
+    <>
+      <span title={address} className="font-mono">
+        {shortAddress(address)}
+      </span>{' '}
+      {mine ? '(your address)' : <span className="font-medium text-red-700">(not your address)</span>}
+    </>
+  );
+}
+
 type Stage =
   | { kind: 'confirm' }
   | { kind: 'signing' }
@@ -65,6 +85,10 @@ export function WithdrawDialog({
   const [stage, setStage] = useState<Stage>({ kind: 'confirm' });
   const zat = prepared.inspected.outputs.reduce((a, o) => a + o.zat, 0);
   const zec = zatToZecString(zat);
+  const fee = zatToZecString(prepared.inspected.feeZat);
+  // The screen shows where the PCZT really sends the money, never the address the admin asked for.
+  const outputs = prepared.inspected.outputs;
+  const mine = ownOrchardAddress(prepared.recipient);
   const txid = stage.kind === 'broadcast' ? stage.txid : null;
 
   usePolling(
@@ -74,6 +98,9 @@ export function WithdrawDialog({
       if (confirmationsOf(s, txid) >= WITHDRAWN_CONFIRMATIONS) {
         setStage({ kind: 'withdrawn', txid });
         onWithdrawn?.();
+      } else if (s.state !== 'sweeping' && s.state !== 'closed' && !s.history.some((h) => h.txid === txid && h.mined_height !== null)) {
+        // The watcher reopened the tab: the transaction expired unmined, nothing left the tab.
+        setStage({ kind: 'error', text: 'The withdrawal expired before it was mined; try again.' });
       }
     },
     STATUS_POLL_MS,
@@ -95,16 +122,32 @@ export function WithdrawDialog({
   if (stage.kind === 'confirm' || stage.kind === 'signing') {
     body = (
       <>
-        <p>
-          Send <strong>{zec} ZEC</strong> to{' '}
-          <span title={prepared.recipient} className="font-mono">
-            {shortAddress(prepared.recipient)}
-          </span>{' '}
-          (your address) · fee {zatToZecString(prepared.inspected.feeZat)} ZEC
-        </p>
+        {outputs.length === 1 ? (
+          <p>
+            Send <strong>{zec} ZEC</strong> to <OutputAddress address={outputs[0]!.address} mine={outputs[0]!.address === mine} /> · fee{' '}
+            {fee} ZEC
+          </p>
+        ) : (
+          <>
+            <p>
+              Send <strong>{zec} ZEC</strong> · fee {fee} ZEC
+            </p>
+            <ul className="list-disc pl-5">
+              {outputs.map((o, i) => (
+                <li key={i}>
+                  {zatToZecString(o.zat)} ZEC to <OutputAddress address={o.address} mine={o.address === mine} />
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
         <details>
           <summary className="cursor-pointer text-sm">Full address</summary>
-          <p className="break-all font-mono text-xs">{prepared.recipient}</p>
+          {outputs.map((o, i) => (
+            <p key={i} className="break-all font-mono text-xs">
+              {o.address}
+            </p>
+          ))}
         </details>
         <p className="text-sm text-neutral-600">Server says: {zatToZecString(prepared.serverSummary.output_zat)} ZEC</p>
         {!prepared.ok && (
