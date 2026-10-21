@@ -6,10 +6,11 @@ import { WatcherModule } from './watcher/watcher.module.js';
 import { TabsModule } from './tabs/tabs.module.js';
 import { SweepModule } from './sweep/sweep.module.js';
 import { StatusModule } from './status/status.module.js';
+import { RateModule } from './rate/rate.module.js';
 import { LimitsModule } from './limits/limits.module.js';
 import { LifecycleModule } from './lifecycle/lifecycle.module.js';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, HealthModule, WatcherModule, TabsModule, SweepModule, StatusModule, LimitsModule, LifecycleModule],
+  imports: [ConfigModule, PrismaModule, HealthModule, WatcherModule, TabsModule, SweepModule, StatusModule, RateModule, LimitsModule, LifecycleModule],
 })
 export class AppModule {}

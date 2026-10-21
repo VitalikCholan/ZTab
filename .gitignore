@@ -23,3 +23,8 @@ wallets/
 !crypto/rust/tests/fixtures/tab/*.pczt
 # SDD scratch workspace (ledgers, briefs, review diffs, test seed)
 .superpowers/
+
+# pwa
+test-results/
+playwright-report/
+pwa/e2e/.harness/

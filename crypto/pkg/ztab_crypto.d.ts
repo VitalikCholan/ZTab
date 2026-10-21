@@ -17,6 +17,11 @@ export class TabAccount {
     readonly ufvk: string;
 }
 
+/**
+ * The Orchard-only unified address of `address` (how `inspectPczt` prints outputs).
+ */
+export function canonicalRecipient(network: string, address: string): string;
+
 export function deriveAddress(network: string, ufvk: string, index: number): string;
 
 export function deriveTabAccount(network: string, spend_seed: Uint8Array): TabAccount;
@@ -40,6 +45,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_tabaccount_free: (a: number, b: number) => void;
+    readonly canonicalRecipient: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly deriveAddress: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly deriveTabAccount: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly inspectPczt: (a: number, b: number, c: number, d: number) => [number, number, number, number];

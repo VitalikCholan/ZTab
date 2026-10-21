@@ -29,7 +29,20 @@ export class SweepService {
 
   async status(tab: Tab): Promise<WatcherSweepStatus> {
     await this.active(tab);
-    return this.watcher.sweepStatus(tab.id);
+    const s = await this.watcher.sweepStatus(tab.id);
+    return {
+      state: s.state,
+      txid: s.txid,
+      mined_height: s.mined_height,
+      confirmations: s.confirmations,
+      history: (Array.isArray(s.history) ? s.history : []).map((h) => ({
+        txid: h.txid,
+        output_zat: h.output_zat,
+        fee_zat: h.fee_zat,
+        mined_height: h.mined_height,
+        confirmations: h.confirmations,
+      })),
+    };
   }
 
   /** The watcher refuses a paused tab's work, so a failed revival stops here. */

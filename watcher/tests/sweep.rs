@@ -339,3 +339,85 @@ async fn a_sync_pass_closes_a_sweeping_tab_whose_sweep_is_deep_enough() {
     assert_eq!(advance_sweeping_tabs(&state).unwrap(), 1);
     assert_eq!(stored(), TabState::Closed);
 }
+
+#[tokio::test]
+async fn sweep_status_lists_history_with_amounts() {
+    use tower::ServiceExt;
+    use zcash_primitives::transaction::Transaction;
+    use zcash_protocol::consensus::{BlockHeight, BranchId};
+    let state = common::offline_state().await;
+    let tab = fixture_tab(&state).await;
+    let get = |uri: String| {
+        let state = state.clone();
+        async move {
+            let req = axum::http::Request::builder()
+                .uri(uri)
+                .header("Authorization", "Bearer test-token")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = ztab_watcher::http::router(state)
+                .oneshot(req)
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        }
+    };
+    let sweep_uri = format!("/v1/tabs/{}/sweep", tab.tab_id);
+    let tab_uri = format!("/v1/tabs/{}", tab.tab_id);
+    assert_eq!(
+        get(sweep_uri.clone()).await["history"],
+        serde_json::json!([])
+    );
+
+    // Offered (amounts as the offer summary reports them) not mined.
+    let txid = common::FIXTURE_FUNDING_TXID;
+    let mined = 4_503_718;
+    state.meta.put_sweep(tab.tab_id, txid, mined + 40).unwrap();
+    state
+        .meta
+        .record_sweep_offer(tab.tab_id, txid, 59_980_000, 20_000)
+        .unwrap();
+    // Not broadcast through the watcher (that needs lightwalletd): history lists nothing
+    // until the sweep is seen mined, which is how a signer-side broadcast shows up.
+    state
+        .meta
+        .set_tab_state(tab.tab_id, TabState::Sweeping)
+        .unwrap();
+    state.health.tip_height.store(mined + 2, Ordering::Relaxed);
+    state
+        .health
+        .synced_height
+        .store(mined + 2, Ordering::Relaxed);
+    assert_eq!(
+        get(sweep_uri.clone()).await["history"],
+        serde_json::json!([])
+    );
+    assert_eq!(get(tab_uri.clone()).await["balance"]["swept_zat"], 0);
+
+    // The wallet sees it mined: history and swept_zat follow.
+    let network = state.wallet.network();
+    let tx = Transaction::read(
+        &common::fixture_rawtx(txid)[..],
+        BranchId::for_height(&network, BlockHeight::from_u32(mined)),
+    )
+    .unwrap();
+    zcash_client_backend::data_api::wallet::decrypt_and_store_transaction(
+        &network,
+        &mut *state.wallet.db(),
+        &tx,
+        Some(BlockHeight::from_u32(mined)),
+    )
+    .unwrap();
+    let st = get(sweep_uri).await;
+    // `advance` stamped the broadcast and the mined height on seeing the sweep mined.
+    assert_eq!(st["history"][0]["txid"], txid);
+    assert_eq!(st["history"][0]["output_zat"], 59_980_000);
+    assert_eq!(st["history"][0]["fee_zat"], 20_000);
+    assert_eq!(st["history"][0]["mined_height"], mined);
+    assert_eq!(st["history"][0]["confirmations"], 3);
+    assert_eq!(st["history"].as_array().unwrap().len(), 1);
+    assert_eq!(get(tab_uri).await["balance"]["swept_zat"], 59_980_000);
+}

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  canonicalRecipient,
   CryptoError,
   deriveAddress,
   deriveTabAccount,
@@ -62,6 +63,29 @@ describe('recipient', () => {
     expect(codeOf(() => validateRecipient('main', RECIPIENT))).toBe('invalid_recipient');
     expect(codeOf(() => validateRecipient('test', 'tmEZhbWHTpdKMw5it8YDspUXSMGQyFwovpU'))).toBe('invalid_recipient');
     expect(codeOf(() => validateRecipient('test', 'nonsense'))).toBe('invalid_recipient');
+  });
+});
+
+describe('canonicalRecipient', () => {
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/recipient.json', import.meta.url), 'utf8')) as {
+    multiReceiver: string;
+    orchardOnly: string;
+  };
+
+  it('reduces an Orchard + Sapling + transparent UA to its Orchard-only form', () => {
+    expect(fx.multiReceiver).not.toBe(fx.orchardOnly);
+    expect(canonicalRecipient('test', fx.multiReceiver)).toBe(fx.orchardOnly);
+  });
+
+  it('leaves an Orchard-only UA unchanged', () => {
+    expect(canonicalRecipient('test', fx.orchardOnly)).toBe(fx.orchardOnly);
+    expect(canonicalRecipient('test', RECIPIENT)).toBe(RECIPIENT);
+  });
+
+  it('refuses what validateRecipient refuses', () => {
+    expect(codeOf(() => canonicalRecipient('test', 'tmEZhbWHTpdKMw5it8YDspUXSMGQyFwovpU'))).toBe('invalid_recipient');
+    expect(codeOf(() => canonicalRecipient('main', fx.multiReceiver))).toBe('invalid_recipient');
+    expect(codeOf(() => canonicalRecipient('test', 'nonsense'))).toBe('invalid_recipient');
   });
 });
 

@@ -1,5 +1,6 @@
 import type { TabRole } from '../auth/token.js';
 import type {
+  WatcherBalance,
   WatcherPayment,
   WatcherStatusFacts,
   WatcherTab,
@@ -17,6 +18,8 @@ export interface TabView {
   stale: boolean;
   role: 'admin' | 'group' | 'participant';
   participant_index?: number;
+  /** Tab balance; admin and group only, never participants. */
+  balance?: WatcherBalance;
   /** The role's own blob, standard base64. */
   blob: string;
   participants: {
@@ -55,6 +58,14 @@ const pickFacts = (f: WatcherStatusFacts): WatcherStatusFacts => ({
   mempool_zat: f.mempool_zat,
   best_confirmations: f.best_confirmations,
   transparent_source: f.transparent_source,
+});
+
+/** Copies only the documented balance fields. */
+const pickBalance = (b: WatcherBalance): WatcherBalance => ({
+  spendable_zat: b.spendable_zat,
+  pending_zat: b.pending_zat,
+  swept_zat: b.swept_zat,
+  min_unspent_confirmations: b.min_unspent_confirmations,
 });
 
 /**
@@ -98,6 +109,9 @@ export function buildTabView(
   if (watcher) {
     view.synced_height = watcher.synced_height;
     view.tip_height = watcher.tip_height;
+  }
+  if (watcher?.balance && role.kind !== 'participant') {
+    view.balance = pickBalance(watcher.balance);
   }
   if (role.kind === 'participant') view.participant_index = role.index;
   return view;

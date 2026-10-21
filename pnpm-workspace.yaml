@@ -1,6 +1,7 @@
 packages:
   - crypto
   - api
+  - pwa
 minimumReleaseAgeExclude:
   - '@vitest/expect@4.1.12'
   - '@vitest/mocker@4.1.12'

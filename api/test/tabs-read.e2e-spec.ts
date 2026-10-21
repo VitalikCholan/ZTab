@@ -18,6 +18,13 @@ const facts = (n: number) => ({
   transparent_source: false,
 });
 
+const BALANCE = {
+  spendable_zat: 1000,
+  pending_zat: 200,
+  swept_zat: 300,
+  min_unspent_confirmations: 3,
+};
+
 describe('GET /tabs/:id', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -84,6 +91,7 @@ describe('GET /tabs/:id', () => {
         { index: 0, address: 'utest1a0', payments: [], status_facts: facts(5) },
         { index: 1, address: 'utest1a1', payments: [], status_facts: facts(7) },
       ],
+      balance: BALANCE,
     });
   });
 
@@ -115,6 +123,13 @@ describe('GET /tabs/:id', () => {
     expect(res.body.participants).toHaveLength(2);
     expect(res.body.participant_index).toBeUndefined();
     expect(JSON.stringify(res.body)).not.toContain('secret');
+  });
+
+  it('admin gets balance; participant never does', async () => {
+    expect((await get(admin).expect(200)).body.balance).toEqual(BALANCE);
+    const res = await get(p1).expect(200);
+    expect('balance' in res.body).toBe(false);
+    expect(res.text).not.toContain('spendable_zat');
   });
 
   it('participant sees only its own slice and blob', async () => {

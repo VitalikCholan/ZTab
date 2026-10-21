@@ -43,7 +43,7 @@ export class StubWatcher {
   private readonly sweepResults = new Map<string, WatcherSweepResult>();
   private readonly registered = new Map<string, string>(); // tab_id -> ufvk
   private registerAddresses:
-    | ((b: { tab_id: string; participants_count: number }) => { index: number; address: string }[])
+    | ((b: { tab_id: string; ufvk: string; participants_count: number }) => { index: number; address: string }[])
     | undefined;
   private delayMs = 0;
   private readonly hooks = new Map<StubRoute, () => Promise<void>>();

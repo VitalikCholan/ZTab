@@ -25,6 +25,7 @@ describe('WatcherClient', () => {
     port: 0,
     rateLimitCreatePerHour: 10,
     rateLimitDefaultPerMinute: 120,
+    rateUrl: 'x',
   });
 
   beforeAll(async () => {

@@ -58,6 +58,15 @@ export function validateRecipient(network: Network, address: string): void {
   call(() => wasm.validateRecipient(network, address));
 }
 
+/**
+ * The Orchard-only unified address of `address`, which is how `inspectPczt` prints outputs.
+ * Compare a wallet UA (Orchard + Sapling + transparent) to PCZT outputs through this.
+ * Throws the same `CryptoError` as `validateRecipient`.
+ */
+export function canonicalRecipient(network: Network, address: string): string {
+  return call(() => wasm.canonicalRecipient(network, address));
+}
+
 export function inspectPczt(network: Network, pczt: Uint8Array): PcztSummary {
   return JSON.parse(call(() => wasm.inspectPczt(network, pczt))) as PcztSummary;
 }

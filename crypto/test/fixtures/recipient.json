@@ -1,0 +1,5 @@
+{
+  "comment": "Built by crypto/rust/tests/recipient.rs multi_receiver_ua(): the tab fixture recipient's Orchard receiver plus a Sapling and a P2PKH receiver (R0, testnet).",
+  "multiReceiver": "utest1xmv0kcmjnurjkgfng744wqcm66l8c559jzsj9s3gz5pflqdn3dqzv7wqg92r69kv3hsr33kn3jga8e4g6pua5fhmwtel78e2nv5mshaux5nkg695697gcaap47ddptcwpv05mwn58v58733myhgy74wh2lpexc0lmdsg9k0ehs5hn24vrm6ycvzykay6qjsxxa696cdxxkfux0mwfku",
+  "orchardOnly": "utest1ar2v4yu756pkxhpacqe0kut2zkjske7y2pe6dea6ezfg7qs3c8e4e5uflja4e4l5869c5j0q6g5gvvl8620uxy9nr26475939uegwc4d"
+}

@@ -69,6 +69,15 @@ pub struct SweepRow {
     pub broadcast_at: Option<OffsetDateTime>,
 }
 
+/// One broadcast sweep of a tab, kept after the tab's single offer row is replaced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SweepHistoryRow {
+    pub txid: String,
+    pub output_zat: u64,
+    pub fee_zat: u64,
+    pub mined_height: Option<u32>,
+}
+
 pub struct MetaStore {
     conn: Mutex<Connection>,
 }
@@ -95,6 +104,11 @@ CREATE TABLE IF NOT EXISTS tab_addresses (
 CREATE TABLE IF NOT EXISTS sweeps (
   tab_id TEXT PRIMARY KEY, txid TEXT NOT NULL,
   expiry_height INTEGER NOT NULL, created_at TEXT NOT NULL, broadcast_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sweep_history (
+  txid TEXT PRIMARY KEY, tab_id TEXT NOT NULL, output_zat INTEGER NOT NULL,
+  fee_zat INTEGER NOT NULL, created_at TEXT NOT NULL, broadcast_at TEXT,
+  mined_height INTEGER
 );
 "#;
 
@@ -403,10 +417,83 @@ impl MetaStore {
         Ok(())
     }
 
+    /// Remembers an offered sweep's amounts; it is listed in the history once broadcast.
+    pub fn record_sweep_offer(
+        &self,
+        tab_id: Uuid,
+        txid: &str,
+        output_zat: u64,
+        fee_zat: u64,
+    ) -> Result<(), WatcherError> {
+        let now = rfc3339(OffsetDateTime::now_utc())?;
+        let to_i64 = |v: u64| i64::try_from(v).map_err(|e| WatcherError::Wallet(e.to_string()));
+        self.conn()
+            .execute(
+                "INSERT OR REPLACE INTO sweep_history (txid, tab_id, output_zat, fee_zat, created_at, broadcast_at, mined_height)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL)",
+                params![txid, tab_id.to_string(), to_i64(output_zat)?, to_i64(fee_zat)?, now],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Stamps a recorded sweep as broadcast (first stamp wins); unknown txids are ignored.
+    pub fn mark_sweep_broadcast(&self, txid: &str) -> Result<(), WatcherError> {
+        let now = rfc3339(OffsetDateTime::now_utc())?;
+        self.conn()
+            .execute(
+                "UPDATE sweep_history SET broadcast_at = ?2 WHERE txid = ?1 AND broadcast_at IS NULL",
+                params![txid, now],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Records the height a sweep was mined at; unknown txids are ignored.
+    pub fn mark_sweep_mined(&self, txid: &str, height: u32) -> Result<(), WatcherError> {
+        self.conn()
+            .execute(
+                "UPDATE sweep_history SET mined_height = ?2 WHERE txid = ?1",
+                params![txid, height],
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Every broadcast sweep of the tab, newest first; offers never broadcast are left out.
+    pub fn sweep_history(&self, tab_id: Uuid) -> Result<Vec<SweepHistoryRow>, WatcherError> {
+        let conn = self.conn();
+        let mut st = conn
+            .prepare(
+                "SELECT txid, output_zat, fee_zat, mined_height FROM sweep_history
+                  WHERE tab_id = ?1 AND broadcast_at IS NOT NULL
+                  ORDER BY broadcast_at DESC, rowid DESC",
+            )
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        let raw: Vec<(String, i64, i64, Option<i64>)> = st
+            .query_map([tab_id.to_string()], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| WatcherError::Wallet(e.to_string()))?;
+        let werr = |e: std::num::TryFromIntError| WatcherError::Wallet(e.to_string());
+        raw.into_iter()
+            .map(|(txid, out, fee, mined)| {
+                Ok(SweepHistoryRow {
+                    txid,
+                    output_zat: u64::try_from(out).map_err(werr)?,
+                    fee_zat: u64::try_from(fee).map_err(werr)?,
+                    mined_height: mined.map(u32::try_from).transpose().map_err(werr)?,
+                })
+            })
+            .collect()
+    }
+
     pub fn open_tabs(&self) -> Result<Vec<TabRow>, WatcherError> {
         let conn = self.conn();
         let mut st = conn
-            .prepare("SELECT tab_id FROM tabs WHERE state IN ('open','sweeping') AND active = 1")
+            .prepare("SELECT tab_id FROM tabs WHERE state IN ('open','sweeping','closed') AND active = 1")
             .map_err(|e| WatcherError::Wallet(e.to_string()))?;
         let ids: Vec<String> = st
             .query_map([], |r| r.get(0))
@@ -634,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn open_tabs_includes_open_and_sweeping_only() {
+    fn open_tabs_includes_open_sweeping_and_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
         let rows: Vec<TabRow> = [
@@ -656,7 +743,7 @@ mod tests {
             .map(|t| t.tab_id)
             .collect();
         got.sort();
-        let mut want = vec![rows[0].tab_id, rows[1].tab_id];
+        let mut want = vec![rows[0].tab_id, rows[1].tab_id, rows[2].tab_id];
         want.sort();
         assert_eq!(got, want);
     }
@@ -816,5 +903,52 @@ mod tests {
         );
         // Rows are per tab.
         assert_eq!(store.get_sweep(Uuid::new_v4()).unwrap(), None);
+    }
+
+    #[test]
+    fn open_tabs_includes_closed_active_tabs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let (a, b) = (row(TabState::Closed), row(TabState::Closed));
+        store.insert_tab(&a).unwrap();
+        store.insert_tab(&b).unwrap();
+        store.set_active(b.tab_id, false).unwrap();
+        let ids: Vec<Uuid> = store
+            .open_tabs()
+            .unwrap()
+            .iter()
+            .map(|t| t.tab_id)
+            .collect();
+        assert_eq!(ids, vec![a.tab_id]);
+    }
+
+    #[test]
+    fn sweep_history_keeps_every_broadcast_sweep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let tab = Uuid::new_v4();
+        assert!(store.sweep_history(tab).unwrap().is_empty());
+        store.record_sweep_offer(tab, "aa", 1_000, 10).unwrap();
+        // Offered but never broadcast: not history.
+        assert!(store.sweep_history(tab).unwrap().is_empty());
+        store.mark_sweep_broadcast("aa").unwrap();
+        store.mark_sweep_mined("aa", 77).unwrap();
+        store.record_sweep_offer(tab, "bb", 2_000, 20).unwrap();
+        store.mark_sweep_broadcast("bb").unwrap();
+        store.record_sweep_offer(tab, "cc", 3_000, 30).unwrap();
+        store
+            .record_sweep_offer(Uuid::new_v4(), "dd", 4, 4)
+            .unwrap();
+        store.mark_sweep_broadcast("dd").unwrap();
+        let h = |txid: &str, out, fee, mined| SweepHistoryRow {
+            txid: txid.into(),
+            output_zat: out,
+            fee_zat: fee,
+            mined_height: mined,
+        };
+        assert_eq!(
+            store.sweep_history(tab).unwrap(),
+            vec![h("bb", 2_000, 20, None), h("aa", 1_000, 10, Some(77))]
+        );
     }
 }
