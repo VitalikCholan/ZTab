@@ -39,6 +39,7 @@ compose() {
     -f "$DEPLOY_DIR/docker-compose.yml" -f "$DEPLOY_DIR/docker-compose.rehearsal.yml" "$@"
 }
 
+# shellcheck disable=SC2329 # invoked by the EXIT trap below
 cleanup() {
   local code=$?
   if [ "$KEEP" = 1 ]; then
