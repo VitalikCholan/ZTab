@@ -6,7 +6,8 @@
 #   bash deploy/rehearsal.sh [--keep] [--from-ghcr <tag>]
 # --from-ghcr <tag>: skip local builds; pull ghcr.io/vitalikcholan/ztab-{api,watcher,pwa}:<tag>
 # (e.g. sha-1234567) and retag them as ztab-*:rehearsal. While the packages are private, run
-# `docker login ghcr.io` first (a token with read:packages).
+# `docker login ghcr.io` first (a token with read:packages). The images are linux/amd64 only:
+# on an arm64 host (Apple Silicon) they run under emulation, which is slower.
 set -euo pipefail
 
 KEEP=0
@@ -19,7 +20,7 @@ while [ $# -gt 0 ]; do
       FROM_GHCR="$2"
       shift
       ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "rehearsal: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -76,7 +77,8 @@ start=$(date +%s)
 if [ -n "$FROM_GHCR" ]; then
   echo "rehearsal: pulling published images (tag $FROM_GHCR)"
   for img in api watcher pwa; do
-    docker pull -q "ghcr.io/vitalikcholan/ztab-$img:$FROM_GHCR" >/dev/null
+    # linux/amd64 only (as published); compose runs it under emulation on an arm64 host.
+    docker pull -q --platform linux/amd64 "ghcr.io/vitalikcholan/ztab-$img:$FROM_GHCR" >/dev/null
     docker tag "ghcr.io/vitalikcholan/ztab-$img:$FROM_GHCR" "ztab-$img:rehearsal"
   done
 else

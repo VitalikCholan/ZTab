@@ -112,7 +112,7 @@ Each service rotates its own log (10 MB x 3). Privacy by design: Caddy has **no 
 ## Smoke tests
 
 - On the server (read-only, safe against production): `cd /opt/ztab/deploy && bash ./smoke.sh` checks `/api/healthz`, `/api/status` (network `test`), the CSP header on a deep link and the http to https redirect. It prints `smoke OK`.
-- `bash deploy/rehearsal.sh [--keep] [--from-ghcr <tag>]` is the **local** rehearsal (Docker Desktop, Node 24, pnpm): it builds the images, starts the stack on `https://localhost` with a local CA and runs the Playwright smoke. That smoke **stops and restarts the API** - never run it against production. Without `--keep` it removes its containers and volumes. With `--from-ghcr <tag>` it skips the local build and tests the published `ghcr.io/vitalikcholan/ztab-*:<tag>` images (needs public packages or `docker login ghcr.io`).
+- `bash deploy/rehearsal.sh [--keep] [--from-ghcr <tag>]` is the **local** rehearsal (Docker Desktop, Node 24, pnpm): it builds the images, starts the stack on `https://localhost` with a local CA and runs the Playwright smoke. That smoke **stops and restarts the API** - never run it against production. Without `--keep` it removes its containers and volumes. With `--from-ghcr <tag>` it skips the local build and tests the published `ghcr.io/vitalikcholan/ztab-*:<tag>` images (needs public packages or `docker login ghcr.io`). The published images are linux/amd64 only, so on Apple Silicon `--from-ghcr` runs them under emulation and is slower.
 - `bash deploy/test/scripts.test.sh` tests the scripts here and runs `shellcheck`.
 
 ## Troubleshooting
