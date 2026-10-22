@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Create <dir>/.env (default: this directory) from .env.example with fresh secrets.
 #   bash deploy/init-env.sh [dir]
-# DOMAIN and ACME_EMAIL come from the environment, else are asked (from stdin, or /dev/tty).
+# DOMAIN and ACME_EMAIL come from the environment, else are asked (from stdin).
 # POSTGRES_PASSWORD and WATCHER_TOKEN are `openssl rand -hex 32`, never printed.
 # An existing .env is never touched: regenerating WATCHER_TOKEN would strand the running stack.
 set -euo pipefail
@@ -15,13 +15,11 @@ if [ -e "$TARGET" ]; then
   exit 0
 fi
 
-ask() { # ask <VAR> <prompt>: keep the env value, else read a line (stdin first, then /dev/tty)
+ask() { # ask <VAR> <prompt>: keep the env value, else read one line from stdin (prompting if it is a terminal)
   local var="$1" prompt="$2" val="${!1:-}"
   if [ -z "$val" ]; then
     if [ -t 0 ]; then
       read -r -p "$prompt: " val || true
-    elif { : </dev/tty; } 2>/dev/null; then
-      read -r -p "$prompt: " val </dev/tty || true
     else
       read -r val || true
     fi

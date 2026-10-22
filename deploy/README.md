@@ -123,4 +123,4 @@ Each service rotates its own log (10 MB x 3). Privacy by design: Caddy has **no 
 - **`git clone` fails in server-setup**: the repo is still private (step 3).
 - **Port 3000/80/443 busy locally during the rehearsal**: stop whatever uses it (`lsof -iTCP:443 -sTCP:LISTEN`), for example a dev API on 3000 or another local web server.
 - **`/api/status` shows the watcher `stale`**: it cannot reach the lightwalletd. `docker compose logs --tail 50 watcher`; if `testnet.zec.rocks` is down, change `ZTAB_LIGHTWALLETD_URL` in `deploy/docker-compose.yml` to another public testnet lightwalletd, commit it to `main` and run `update.sh` (a local edit on the server would block `git pull`).
-- **Reboot test**: `ssh root@<ip> reboot`, wait a minute, `bash ./smoke.sh` again. `systemctl status ztab.service` shows the unit.
+- **Reboot test**: `ssh root@<ip> reboot`, wait a minute, then `ssh root@<ip> 'cd /opt/ztab/deploy && bash ./smoke.sh'` again. `ssh root@<ip> 'systemctl status ztab.service'` shows the unit.

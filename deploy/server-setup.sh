@@ -6,6 +6,10 @@
 # Safe to re-run: every step checks before it acts, and an existing .env is never regenerated.
 set -euo pipefail
 
+# Everything lives in main() so bash parses the whole file before running any of it: children
+# that read stdin (apt, dpkg, docker) cannot eat the rest of a script piped over ssh, and a
+# dropped connection cannot run a truncated script.
+main() {
 REPO_URL="${REPO_URL:-https://github.com/VitalikCholan/ZTab}"
 APP_DIR=/opt/ztab
 
@@ -38,8 +42,8 @@ ask ACME_EMAIL "Email for Let's Encrypt notices"
 export DEBIAN_FRONTEND=noninteractive
 
 echo "== packages"
-apt-get update -y
-apt-get install -y ca-certificates curl gnupg git openssl ufw fail2ban unattended-upgrades
+apt-get update -y </dev/null
+apt-get install -y ca-certificates curl gnupg git openssl ufw fail2ban unattended-upgrades </dev/null
 
 echo "== Docker Engine (official apt repo)"
 install -m 0755 -d /etc/apt/keyrings
@@ -49,13 +53,13 @@ if [ ! -s /etc/apt/keyrings/docker.asc ]; then
 fi
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
   >/etc/apt/sources.list.d/docker.list
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+apt-get update -y </dev/null
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin </dev/null
 systemctl enable --now docker
 
 echo "== firewall, fail2ban, automatic security updates"
 ufw allow 22,80,443/tcp
-ufw --force enable
+ufw --force enable </dev/null
 systemctl enable --now fail2ban
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
   >/etc/apt/apt.conf.d/20auto-upgrades
@@ -68,12 +72,12 @@ echo "== code in $APP_DIR"
 mkdir -p "$APP_DIR"
 chown ztab:ztab "$APP_DIR"
 if [ ! -d "$APP_DIR/.git" ]; then
-  runuser -u ztab -- git clone "$REPO_URL" "$APP_DIR"
+  runuser -u ztab -- git clone "$REPO_URL" "$APP_DIR" </dev/null
 fi
 
 echo "== deploy/.env"
 (cd "$APP_DIR" && runuser -u ztab -- env "DOMAIN=$DOMAIN" "ACME_EMAIL=$ACME_EMAIL" \
-  bash "$APP_DIR/deploy/init-env.sh" "$APP_DIR/deploy")
+  bash "$APP_DIR/deploy/init-env.sh" "$APP_DIR/deploy" </dev/null)
 
 echo "== systemd: ztab.service (stack comes back after a reboot)"
 cat >/etc/systemd/system/ztab.service <<'UNIT'
@@ -97,7 +101,10 @@ systemctl daemon-reload
 systemctl enable ztab.service
 
 echo "== first deploy (pull images, start, smoke test)"
-(cd "$APP_DIR/deploy" && runuser -u ztab -- bash "$APP_DIR/deploy/update.sh")
+(cd "$APP_DIR/deploy" && runuser -u ztab -- bash "$APP_DIR/deploy/update.sh" </dev/null)
 systemctl start ztab.service
 
 echo "server-setup: done. Open https://$DOMAIN"
+}
+
+main "$@"

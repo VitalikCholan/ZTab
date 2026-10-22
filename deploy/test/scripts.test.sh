@@ -112,10 +112,12 @@ test_update() {
   make_repo upd
   local c="$ROOT/upd" log="$ROOT/upd.log" short out
   : >"$log"
-  short="$(git -C "$c" rev-parse --short HEAD)"
+  short="$(git -C "$c" rev-parse --short=7 HEAD)"
+  printf '%s' "$short" | grep -Eq '^[0-9a-f]{7}$' || fail "test setup: short sha is 7 hex"
   out="$(cd "$c/deploy" && PATH="$FAKEBIN:$PATH" FAKE_DOCKER_LOG="$log" bash ./update.sh 2>&1)"
   local rc=$?
   [ "$rc" = 0 ] && pass "update: exits 0" || fail "update: exits 0" "$rc: $out"
+  printf '%s' "$(envval "$c/deploy/.env" IMAGE_TAG)" | grep -Eq '^sha-[0-9a-f]{7}$' && pass "update: tag is exactly 7 hex chars" || fail "update: tag is exactly 7 hex chars"
   [ "$(envval "$c/deploy/.env" IMAGE_TAG)" = "sha-$short" ] && pass "update: .env gets IMAGE_TAG=sha-<short>" || fail "update: .env gets IMAGE_TAG=sha-<short>" "$(envval "$c/deploy/.env" IMAGE_TAG)"
   [ "$(grep -c '^IMAGE_TAG=' "$c/deploy/.env")" = 1 ] && pass "update: IMAGE_TAG line replaced, not duplicated" || fail "update: IMAGE_TAG line replaced, not duplicated"
   [ "$(envval "$c/deploy/.env" DOMAIN)" = "example.org" ] && pass "update: other .env lines untouched" || fail "update: other .env lines untouched"
@@ -128,11 +130,20 @@ test_update() {
   # pull failure: message, non-zero, no up, .env still the previous tag
   make_repo updfail
   c="$ROOT/updfail"; log="$ROOT/updfail.log"; : >"$log"
-  short="$(git -C "$c" rev-parse --short HEAD)"
+  git clone -q "$ROOT/updfail.git" "$ROOT/updfail-other" 2>/dev/null
+  (
+    cd "$ROOT/updfail-other" || exit 1
+    git config user.email t@example.org; git config user.name t
+    echo newer >deploy/marker; git add deploy/marker; git commit -q -m newer; git push -q origin HEAD 2>/dev/null
+  )
+  local head_before
+  head_before="$(git -C "$c" rev-parse HEAD)"
+  short="$(git -C "$ROOT/updfail-other" rev-parse --short=7 HEAD)"
   out="$(cd "$c/deploy" && PATH="$FAKEBIN:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_FAIL_PULL=1 bash ./update.sh 2>&1)"
   rc=$?
   [ "$rc" != 0 ] && pass "update: failed pull exits non-zero" || fail "update: failed pull exits non-zero"
   case "$out" in *"images for sha-$short not published yet (check the Images workflow)"*) pass "update: failed pull prints the not-published message" ;; *) fail "update: failed pull prints the not-published message" "$out" ;; esac
+  [ "$(git -C "$c" rev-parse HEAD)" = "$head_before" ] && [ ! -e "$c/deploy/marker" ] && pass "update: failed pull does not move the checkout" || fail "update: failed pull does not move the checkout"
   grep -q 'up' "$log" && fail "update: failed pull does not run up" || pass "update: failed pull does not run up"
   [ "$(envval "$c/deploy/.env" IMAGE_TAG)" = "main" ] && pass "update: failed pull keeps the previous IMAGE_TAG" || fail "update: failed pull keeps the previous IMAGE_TAG" "$(envval "$c/deploy/.env" IMAGE_TAG)"
   grep -q smoke-ran "$log" && fail "update: failed pull does not run smoke" || pass "update: failed pull does not run smoke"
