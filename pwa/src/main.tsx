@@ -1,3 +1,5 @@
+// Must stay first: configures zod before any module that uses it is evaluated.
+import './zod-config.ts';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
