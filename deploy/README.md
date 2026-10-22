@@ -6,7 +6,7 @@ One VPS, five containers, one public origin: `https://<your-domain>` serves the 
 
 | Service | Image | Ports | State |
 |---|---|---|---|
-| `caddy` | `caddy:2.11` | 80, 443 published | volume `caddy_data` (Let's Encrypt certificates) |
+| `caddy` | `caddy:2.11` | 80, 443 (tcp), 443 (udp, HTTP/3) published | volume `caddy_data` (Let's Encrypt certificates) |
 | `pwa` | `ghcr.io/vitalikcholan/ztab-pwa:<tag>`, one-shot: copies `dist/` into `pwa_dist` and exits | none | volume `pwa_dist` |
 | `api` | `ghcr.io/vitalikcholan/ztab-api:<tag>` | 3000, internal | none |
 | `watcher` | `ghcr.io/vitalikcholan/ztab-watcher:<tag>` | 8787, internal | volume `watcher_data` |
@@ -84,7 +84,7 @@ Update to the latest `main` (only after its Images workflow is green; otherwise 
 ssh root@<ip> 'cd /opt/ztab/deploy && runuser -u ztab -- bash ./update.sh'
 ```
 
-`update.sh` does `git pull --ff-only`, pins `IMAGE_TAG=sha-<short HEAD>` in `.env`, `docker compose pull`, `up -d --remove-orphans`, then `smoke.sh`. The `watcher_data` wallet and the database survive updates. Never run `docker compose down -v`: it deletes the volumes.
+`update.sh` does `git fetch`, pulls the images for `sha-<7 chars of the upstream commit>`, and only if that works fast-forwards the checkout (`git merge --ff-only`), pins `IMAGE_TAG` in `.env`, runs `up -d --remove-orphans`, then `smoke.sh`. The `watcher_data` wallet and the database survive updates. Never run `docker compose down -v`: it deletes the volumes.
 
 Roll back to an older build (find the sha in the Actions tab or `git log --oneline`):
 
@@ -112,7 +112,7 @@ Each service rotates its own log (10 MB x 3). Privacy by design: Caddy has **no 
 ## Smoke tests
 
 - On the server (read-only, safe against production): `cd /opt/ztab/deploy && bash ./smoke.sh` checks `/api/healthz`, `/api/status` (network `test`), the CSP header on a deep link and the http to https redirect. It prints `smoke OK`.
-- `bash deploy/rehearsal.sh [--keep]` is the **local** rehearsal (Docker Desktop, Node 24, pnpm): it builds the images, starts the stack on `https://localhost` with a local CA and runs the Playwright smoke. That smoke **stops and restarts the API** - never run it against production. Without `--keep` it removes its containers and volumes.
+- `bash deploy/rehearsal.sh [--keep] [--from-ghcr <tag>]` is the **local** rehearsal (Docker Desktop, Node 24, pnpm): it builds the images, starts the stack on `https://localhost` with a local CA and runs the Playwright smoke. That smoke **stops and restarts the API** - never run it against production. Without `--keep` it removes its containers and volumes. With `--from-ghcr <tag>` it skips the local build and tests the published `ghcr.io/vitalikcholan/ztab-*:<tag>` images (needs public packages or `docker login ghcr.io`).
 - `bash deploy/test/scripts.test.sh` tests the scripts here and runs `shellcheck`.
 
 ## Troubleshooting

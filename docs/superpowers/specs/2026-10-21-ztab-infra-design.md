@@ -86,3 +86,29 @@ PWA збирається **в CI, домен-незалежно**: `VITE_API_URL
 - Rust-образ у GitHub Actions без кешу — 15–25 хв; кеш обов'язковий.
 - Судді на одному NAT упираються в rate limit — підняті ліміти в §3.
 - `testnet.zcashexplorer.app` застарілий — посилання на експлорер вимкнене, це нормально для демо.
+
+## 10. Зміни після реалізації
+
+Що будівельник зробив інакше, ніж у специфікації, і чому.
+
+- **HSTS.** Правило з §3 реалізоване CEL-матчером Caddy: `"{$DOMAIN}" != "localhost" && !"{$DOMAIN}".endsWith("sslip.io")`; `{$DOMAIN}` підставляється при розборі Caddyfile, тож правило фіксоване на деплой. Матчер `host *.sslip.io` не годиться: він пропускає багаторівневі хости на кшталт `1.2.3.4.sslip.io`. Тест: smoke піднімає одноразові контейнери `caddy:2.11` з `DOMAIN=ztab.example` (HSTS є) та `203-0-113-7.sslip.io` / `203.0.113.7.sslip.io` (HSTS немає).
+- **HSTS від API.** helmet в API шле власний `Strict-Transport-Security` з `includeSubDomains`; Caddy прибирає його (`header_down -Strict-Transport-Security`) і ставить єдиний HSTS за правилом вище. `nosniff` на `/api/*` замінюється, а не дублюється.
+- **CSP без `'unsafe-eval'`.** Zod v4 пробує JIT через `Function("")`, що дає порушення CSP. Додано `pwa/src/zod-config.ts` (`z.config({ jitless: true })`), імпортований першим у `main.tsx`; CSP з §3 лишається без змін.
+- **CA репетиції.** Caddy у репетиції працює з `local_certs` (токен `{$CADDY_LOCAL_CERTS}` у глобальному блоці Caddyfile, у проді порожній, тож тестується той самий файл). Кореневий та проміжний сертифікати експортуються в `deploy/smoke/.ca.crt`: Node довіряє їм через `NODE_EXTRA_CA_CERTS`, Chromium лише публічним ключам цього ланцюга через `--ignore-certificate-errors-spki-list`; `ignoreHTTPSErrors` не використовується, service worker реєструється під справжнім TLS.
+- **Порти.** Публікуються `80`, `443` і `443/udp` (HTTP/3); у репетиції лише `127.0.0.1` 80/443 через `ports: !override` (Compose ≥ 2.24).
+- **Сервіс `pwa`** має `restart: "no"` (one-shot; з `unless-stopped` він би крутився в циклі), попри «усі сервіси `unless-stopped`».
+- **Статичні файли.** `/assets/*` без SPA-fallback: відсутній ассет дає 404 без `immutable`, а не закешований `index.html`. `no-cache` діє на все поза `/assets/*` (надмножина чотирьох файлів зі спеки), щоб deep link `/t/<id>` не кешувався евристично.
+- **Error-лог.** Додатково видаляється `request>client_ip` (Caddy 2.11 логує і його). Тест зупиняє API, щоб отримати 502 (4xx логується на DEBUG і не дає покриття), тому цей smoke **ніколи не запускати проти продакшну**.
+- **`server-setup.sh`** запускається як `ssh root@<ip> "DOMAIN=… ACME_EMAIL=… bash -s" < deploy/server-setup.sh`: stdin зайнятий скриптом, тож інтерактивний `read` неможливий, значення передаються через змінні середовища. Тіло загорнуте в `main()`, щоб файл розібрався повністю до виконання.
+- **`update.sh`**: `git fetch` → `docker compose pull` для `sha-<7>` (`--short=7`, збігається з тегом `images.yml`) → лише після успіху `git merge --ff-only` і запис `IMAGE_TAG`. Якщо образів ще нема: `images for sha-<x> not published yet`, нічого не змінено.
+- **Приватний репозиторій.** Поки репозиторій приватний, `git clone` на VPS і pull з GHCR не працюють; у README крок «репо та пакети публічні» поставлений перед `server-setup.sh` (нумерація 0–6 лишилась зі спеки).
+- **CI** (`ci.yml`): джоби crypto, watcher, watcher-lint (fmt + clippy, advisory), api, pwa, deploy; runner `ubuntu-24.04`. Типові часи: crypto 1–2 хв, watcher ~3,3 хв, watcher-lint ~3,4 хв, api ~1,3 хв, pwa ~2,5 хв, deploy 15–17 хв (збірка образів ≈14 хв, smoke ≈7 с). Docker layer cache не додавали (поріг 25 хв не перевищено; для `type=gha` довелося б переписати збірку на `build-push-action`). Мажори actions піднято до Node 24 (`checkout@v7`, `setup-node@v7`, `pnpm/action-setup@v6`); у watcher виконано `cargo fmt`, щоб lint був зелений.
+- **`images.yml`**: контекст збірки watcher це `watcher` (його Dockerfile і `.dockerignore` написані під нього), api і pwa збираються з `.`. Тригер `workflow_run` після CI на `main` збирає саме `head_sha`, який тестував CI; тег `main` рухається лише якщо цей SHA є верхівкою гілки. Job виконується лише для `push` з того ж репозиторію й гілки `main` (захист від fork-PR). Тимчасовий `push` на `infra` був потрібен для першого прогону, бо `workflow_dispatch` недоступний, поки workflow не на `main`; потім видалений.
+- **`rehearsal.sh --from-ghcr <tag>`** тягне опубліковані образи й перетегує їх у `ztab-*:rehearsal`, пропускаючи збірку.
+
+### Відкрито для власника
+
+- Зробити репозиторій і три GHCR-пакети (`ztab-api`, `ztab-watcher`, `ztab-pwa`) публічними.
+- Після цього один раз виконати `bash deploy/rehearsal.sh --from-ghcr <sha>`: токен агента не мав `read:packages`, тож публіковані образи ще не перевірені.
+- Перший справжній прогін `images.yml` (через `workflow_run`) станеться після мержу в `main`.
+- Перший реальний запуск `server-setup.sh` на VPS і ручний прогін на testnet (запис у `pwa/README.md`).
