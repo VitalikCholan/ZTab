@@ -1,0 +1,118 @@
+# ZTab testnet demo: one VPS, five services, only Caddy is published (80/443).
+#   cd /opt/ztab/deploy && docker compose up -d
+# Variables come from deploy/.env (see .env.example). Images are pulled from GHCR, pinned by IMAGE_TAG.
+name: ztab
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2.11
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - pwa_dist:/srv/pwa:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      pwa:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    logging: *logging
+
+  # One-shot: copies the built PWA into pwa_dist and exits 0. Not restarted (it would loop);
+  # every `up` that changes IMAGE_TAG recreates it and refreshes the bundle.
+  pwa:
+    image: ghcr.io/vitalikcholan/ztab-pwa:${IMAGE_TAG:-main}
+    restart: "no"
+    volumes:
+      - pwa_dist:/srv/pwa
+    logging: *logging
+
+  api:
+    image: ghcr.io/vitalikcholan/ztab-api:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      DATABASE_URL: postgresql://ztab:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/ztab
+      WATCHER_URL: http://watcher:8787
+      WATCHER_TOKEN: ${WATCHER_TOKEN:?WATCHER_TOKEN is required}
+      ZTAB_NETWORK: test
+      CORS_ORIGIN: https://${DOMAIN:?DOMAIN is required}
+      RATE_LIMIT_CREATE_PER_HOUR: "60"
+      RATE_LIMIT_DEFAULT_PER_MINUTE: "600"
+      PORT: "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      watcher:
+        condition: service_healthy
+    logging: *logging
+
+  watcher:
+    image: ghcr.io/vitalikcholan/ztab-watcher:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    init: true # PID 1 reaps and forwards signals; the binary is not an init
+    expose:
+      - "8787"
+    environment:
+      ZTAB_API_TOKEN: ${WATCHER_TOKEN:?WATCHER_TOKEN is required}
+      ZTAB_LISTEN: 0.0.0.0:8787
+      ZTAB_DATA_DIR: /data
+      ZTAB_NETWORK: test
+      ZTAB_CONNECTION: direct
+      ZTAB_LIGHTWALLETD_URL: https://testnet.zec.rocks:443
+    volumes:
+      - watcher_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/v1/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    logging: *logging
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: ztab
+      POSTGRES_DB: ztab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "ztab", "-d", "ztab"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 10
+    logging: *logging
+
+volumes:
+  pgdata:
+  watcher_data:
+  pwa_dist:
+  caddy_data:
+  caddy_config:

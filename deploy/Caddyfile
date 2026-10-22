@@ -1,0 +1,59 @@
+# ZTab: one origin for the PWA (static, from the pwa_dist volume) and the API (/api/* -> api:3000).
+# DOMAIN and ACME_EMAIL come from deploy/.env. Let's Encrypt is automatic for a real DOMAIN;
+# DOMAIN=localhost gets Caddy's local CA. CADDY_LOCAL_CERTS is unset in production; the
+# rehearsal and the smoke set it to `local_certs` so no ACME request is ever made.
+{
+	email {$ACME_EMAIL}
+	{$CADDY_LOCAL_CERTS}
+	# No access log (no site-level `log`). This configures the default logger, which carries
+	# the error log: drop the request URI (tab ids, txids, query strings), headers and IPs.
+	log {
+		output stderr
+		format filter {
+			wrap console
+			fields {
+				request>uri delete
+				request>headers delete
+				request>remote_ip delete
+				request>client_ip delete
+			}
+		}
+	}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	# HSTS only on a real domain: a rehearsal host (localhost, *.sslip.io) must never be pinned.
+	# {$DOMAIN} is substituted when the Caddyfile is parsed, so this is a constant per deploy.
+	@hsts expression `"{$DOMAIN}" != "localhost" && !"{$DOMAIN}".endsWith("sslip.io")`
+	header @hsts Strict-Transport-Security "max-age=31536000"
+
+	handle_path /api/* {
+		# The API (helmet) sends its own HSTS (with includeSubDomains) and nosniff: drop its HSTS
+		# so the rule above is the only one, and replace nosniff so it is not doubled.
+		reverse_proxy api:3000 {
+			header_down -Strict-Transport-Security
+			header_down X-Content-Type-Options nosniff
+		}
+	}
+
+	handle {
+		header {
+			Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+			Referrer-Policy no-referrer
+			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+			X-Content-Type-Options nosniff
+		}
+		# Hashed bundles never change; everything else (index.html and every SPA deep link that
+		# falls back to it, sw.js, registerSW.js, the manifest, icons) is revalidated.
+		@immutable path /assets/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		@revalidate not path /assets/*
+		header @revalidate Cache-Control no-cache
+
+		root * /srv/pwa
+		try_files {path} /index.html
+		file_server
+	}
+}
