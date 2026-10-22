@@ -634,7 +634,11 @@ fn run_signer_cmd(cmd: &str, input: &serde_json::Value) -> serde_json::Value {
         .write_all(input.to_string().as_bytes())
         .unwrap();
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success(), "external signer failed: {}", out.status);
+    assert!(
+        out.status.success(),
+        "external signer failed: {}",
+        out.status
+    );
     serde_json::from_slice(&out.stdout).expect("signer reply is JSON")
 }
 
@@ -653,7 +657,11 @@ pub fn dump_sweep_fixture(
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("spend_seed.hex"), hex::encode(spend_seed)).unwrap();
-    std::fs::write(dir.join("sweep.proved.pczt"), URL_SAFE_NO_PAD.decode(pczt_b64).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("sweep.proved.pczt"),
+        URL_SAFE_NO_PAD.decode(pczt_b64).unwrap(),
+    )
+    .unwrap();
     let expected = serde_json::json!({
         "network": "test",
         "ufvk": ufvk,
@@ -664,5 +672,9 @@ pub fn dump_sweep_fixture(
         "totalInZat": summary["inputs_zat"],
         "txid": summary["txid"],
     });
-    std::fs::write(dir.join("expected.json"), serde_json::to_string_pretty(&expected).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("expected.json"),
+        serde_json::to_string_pretty(&expected).unwrap(),
+    )
+    .unwrap();
 }
