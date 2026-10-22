@@ -3,16 +3,26 @@
 # https://localhost (Caddy local CA, ports bound to 127.0.0.1), run the Playwright smoke,
 # tear everything down (volumes included) unless --keep. Exit code = smoke result.
 # Works on a dev machine and on a GitHub Actions ubuntu runner (needs Docker, Node 24, pnpm).
-#   bash deploy/rehearsal.sh [--keep]
+#   bash deploy/rehearsal.sh [--keep] [--from-ghcr <tag>]
+# --from-ghcr <tag>: skip local builds; pull ghcr.io/vitalikcholan/ztab-{api,watcher,pwa}:<tag>
+# (e.g. sha-1234567) and retag them as ztab-*:rehearsal. While the packages are private, run
+# `docker login ghcr.io` first (a token with read:packages).
 set -euo pipefail
 
 KEEP=0
-for arg in "$@"; do
-  case "$arg" in
+FROM_GHCR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --keep) KEEP=1 ;;
-    -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
-    *) echo "rehearsal: unknown argument: $arg" >&2; exit 2 ;;
+    --from-ghcr)
+      [ $# -ge 2 ] || { echo "rehearsal: --from-ghcr needs a tag" >&2; exit 2; }
+      FROM_GHCR="$2"
+      shift
+      ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    *) echo "rehearsal: unknown argument: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,12 +73,20 @@ diagnose() {
 }
 
 start=$(date +%s)
-echo "rehearsal: building images"
-docker build -q -t ztab-watcher:rehearsal "$REPO_DIR/watcher" >/dev/null
-docker build -q -t ztab-api:rehearsal -f "$REPO_DIR/api/Dockerfile" "$REPO_DIR" >/dev/null
-docker build -q -t ztab-pwa:rehearsal -f "$REPO_DIR/pwa/Dockerfile" \
-  --build-arg VITE_API_URL=/api --build-arg VITE_NETWORK=test "$REPO_DIR" >/dev/null
-echo "rehearsal: images built in $(( $(date +%s) - start ))s"
+if [ -n "$FROM_GHCR" ]; then
+  echo "rehearsal: pulling published images (tag $FROM_GHCR)"
+  for img in api watcher pwa; do
+    docker pull -q "ghcr.io/vitalikcholan/ztab-$img:$FROM_GHCR" >/dev/null
+    docker tag "ghcr.io/vitalikcholan/ztab-$img:$FROM_GHCR" "ztab-$img:rehearsal"
+  done
+else
+  echo "rehearsal: building images"
+  docker build -q -t ztab-watcher:rehearsal "$REPO_DIR/watcher" >/dev/null
+  docker build -q -t ztab-api:rehearsal -f "$REPO_DIR/api/Dockerfile" "$REPO_DIR" >/dev/null
+  docker build -q -t ztab-pwa:rehearsal -f "$REPO_DIR/pwa/Dockerfile" \
+    --build-arg VITE_API_URL=/api --build-arg VITE_NETWORK=test "$REPO_DIR" >/dev/null
+fi
+echo "rehearsal: images ready in $(( $(date +%s) - start ))s"
 
 # Start from nothing: a stale stack or volume from an aborted run would hide first-boot bugs.
 compose down -v --remove-orphans >/dev/null 2>&1 || true
