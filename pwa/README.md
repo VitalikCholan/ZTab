@@ -18,13 +18,24 @@ pnpm --filter @ztab/pwa preview        # serve the build on :4173
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `VITE_API_URL` | yes | `http://127.0.0.1:3000` (in `.env.example`) | Base URL of the ZTab API |
+| `VITE_API_URL` | yes | `http://127.0.0.1:3000` (in `.env.example`) | Base URL of the ZTab API: absolute, or a path such as `/api` (resolved against the page origin; used behind a reverse proxy) |
 | `VITE_NETWORK` | yes | `test` (in `.env.example`) | `test` or `main` |
 | `VITE_EXPLORER_TX_URL` | no | empty | Block explorer tx link prefix, e.g. `https://explorer.example/tx/` |
 | `VITE_DEMO_PAYMENT` | no | unset | Reserved, leave unset |
 | `VITE_HTTPS` | no | unset | `1` serves the dev server over self-signed HTTPS (`vite.config.ts`) |
 
 `VITE_*` values are baked into the bundle at build time.
+
+## Container
+
+`pwa/Dockerfile` builds the bundle and ships it as a one-shot image: on start it empties `/srv/pwa` (a mounted volume), copies the built files into it, prints `pwa: dist copied (<n> files)` and exits. A web server container serves the same volume. Build from the repo root:
+
+```bash
+docker build -f pwa/Dockerfile --build-arg VITE_API_URL=/api --build-arg VITE_NETWORK=test -t ztab-pwa .
+docker run --rm -v pwa-dist:/srv/pwa ztab-pwa
+```
+
+`VITE_EXPLORER_TX_URL` is an optional build arg. The committed `crypto/pkg` wasm is used as is; it is not rebuilt in the image.
 
 ## Test
 
