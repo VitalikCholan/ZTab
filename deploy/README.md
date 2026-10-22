@@ -31,7 +31,7 @@ Porkbun or Cloudflare Registrar. If the DNS is on Cloudflare, set every record t
 
 ### 1. DNS
 
-Add an `A` record `@` pointing at the server IP (and `www` as a `CNAME` to `@` if you want it). You get the IP in step 2; add the record right after, and check it resolves before step 4:
+Add an `A` record `@` pointing at the server IP. Do not add a `www` record: Caddy serves only `DOMAIN` and has no certificate for `www`, so it would show a TLS error. You get the IP in step 2; add the record right after, and check it resolves before step 4:
 
 ```bash
 dig +short example.org
@@ -39,7 +39,7 @@ dig +short example.org
 
 ### 2. Create the server
 
-Hetzner Cloud: CX23 (2 vCPU, 4 GB), Ubuntu 24.04, Nuremberg or Helsinki, add your SSH key. Check you can log in:
+Hetzner Cloud: CX23 (2 vCPU, 4 GB, x86), Ubuntu 24.04, Nuremberg or Helsinki, add your SSH key. It must be an x86 server (CX/CPX/CCX), never a CAX (ARM): the images are built for linux/amd64 only. Check you can log in:
 
 ```bash
 ssh root@<ip> 'lsb_release -ds'
@@ -50,7 +50,7 @@ ssh root@<ip> 'lsb_release -ds'
 The server clones the repo and pulls the three images without credentials, so both must be public. (The repo has to be public at submission anyway.)
 
 1. GitHub, repo `VitalikCholan/ZTab`, Settings, General, Danger Zone: **Change visibility** to Public.
-2. Make sure the work is on `main` (merge the `infra` PR) and that the **CI** workflow and then the **Images** workflow are green for that commit (Actions tab). This publishes `ghcr.io/vitalikcholan/ztab-{api,watcher,pwa}:main` and `:sha-<short>`.
+2. Make sure the work is on `main` (merge the `infra` PR) and that the **CI** workflow and then the **Images** workflow are green for that commit (Actions tab). This publishes `ghcr.io/vitalikcholan/ztab-{api,watcher,pwa}:main` and `:sha-<short>`. If the Images workflow does not start after the merge (it is triggered by the CI run's completion), start it by hand: `gh workflow run images.yml --ref main`.
 3. For each of the three packages (`ztab-api`, `ztab-watcher`, `ztab-pwa`): GitHub profile, Packages, the package, Package settings, **Change visibility** to Public. Do it once; it persists.
 
 Keeping things private instead: for the repo pass credentials in the clone URL (`REPO_URL=https://<user>:<token>@github.com/VitalikCholan/ZTab`, it is stored in `/opt/ztab/.git/config`), and for images run `docker login ghcr.io` as the `ztab` user on the server (`runuser -u ztab -- docker login ghcr.io`).
@@ -84,7 +84,7 @@ Update to the latest `main` (only after its Images workflow is green; otherwise 
 ssh root@<ip> 'cd /opt/ztab/deploy && runuser -u ztab -- bash ./update.sh'
 ```
 
-`update.sh` does `git fetch`, pulls the images for `sha-<7 chars of the upstream commit>`, and only if that works fast-forwards the checkout (`git merge --ff-only`), pins `IMAGE_TAG` in `.env`, runs `up -d --remove-orphans`, then `smoke.sh`. The `watcher_data` wallet and the database survive updates. Never run `docker compose down -v`: it deletes the volumes.
+`update.sh` does `git fetch`, pulls the images for `sha-<7 chars of the upstream commit>`, and only if that works fast-forwards the checkout (`git merge --ff-only`), pins `IMAGE_TAG` in `.env`, runs `up -d --remove-orphans` (and `restart caddy` if the Caddyfile changed), then `smoke.sh`. The one-shot `pwa` container re-copies the static site, so for about a second the site may serve 404s: do not run `update.sh` while judges are using the demo. The `watcher_data` wallet and the database survive updates. Never run `docker compose down -v`: it deletes the volumes.
 
 Roll back to an older build (find the sha in the Actions tab or `git log --oneline`):
 
