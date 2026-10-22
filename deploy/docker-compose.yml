@@ -80,7 +80,8 @@ services:
       ZTAB_DATA_DIR: /data
       ZTAB_NETWORK: test
       ZTAB_CONNECTION: direct
-      ZTAB_LIGHTWALLETD_URL: https://testnet.zec.rocks:443
+      # Switchable from .env without a commit (e.g. if testnet.zec.rocks is down during judging).
+      ZTAB_LIGHTWALLETD_URL: ${ZTAB_LIGHTWALLETD_URL:-https://testnet.zec.rocks:443}
     volumes:
       - watcher_data:/data
     healthcheck:

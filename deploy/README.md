@@ -12,7 +12,7 @@ One VPS, five containers, one public origin: `https://<your-domain>` serves the 
 | `watcher` | `ghcr.io/vitalikcholan/ztab-watcher:<tag>` | 8787, internal | volume `watcher_data` |
 | `postgres` | `postgres:16-alpine` | 5432, internal | volume `pgdata` |
 
-Only 22 (SSH), 80 and 443 are open. The watcher talks to the public lightwalletd `https://testnet.zec.rocks:443`; there is no own Zcash node. Config lives in `deploy/.env` (mode 600, never committed): `DOMAIN`, `ACME_EMAIL`, `POSTGRES_PASSWORD`, `WATCHER_TOKEN`, `IMAGE_TAG`. The scripts generate the secrets and never print them.
+Only 22 (SSH), 80 and 443 are open. The watcher talks to the public lightwalletd `https://testnet.zec.rocks:443`; there is no own Zcash node. Config lives in `deploy/.env` (mode 600, never committed): `DOMAIN`, `ACME_EMAIL`, `POSTGRES_PASSWORD`, `WATCHER_TOKEN`, `IMAGE_TAG`, and optionally `ZTAB_LIGHTWALLETD_URL` (see Troubleshooting). The scripts generate the secrets and never print them.
 
 ## Prerequisites
 
@@ -122,5 +122,14 @@ Each service rotates its own log (10 MB x 3). Privacy by design: Caddy has **no 
 - **`docker compose pull` fails with 401/denied**: the GHCR packages are still private (step 3).
 - **`git clone` fails in server-setup**: the repo is still private (step 3).
 - **Port 3000/80/443 busy locally during the rehearsal**: stop whatever uses it (`lsof -iTCP:443 -sTCP:LISTEN`), for example a dev API on 3000 or another local web server.
-- **`/api/status` shows the watcher `stale`**: it cannot reach the lightwalletd. `docker compose logs --tail 50 watcher`; if `testnet.zec.rocks` is down, change `ZTAB_LIGHTWALLETD_URL` in `deploy/docker-compose.yml` to another public testnet lightwalletd, commit it to `main` and run `update.sh` (a local edit on the server would block `git pull`).
+- **`/api/status` shows the watcher `stale`**: it cannot reach the lightwalletd. `docker compose logs --tail 50 watcher`; if `testnet.zec.rocks` is down, point the watcher at another public testnet lightwalletd in `.env` (no commit needed; never edit tracked files on the server, `update.sh` fast-forwards with `git merge --ff-only` and refuses to run over local changes):
+
+  ```bash
+  ssh root@<ip>
+  cd /opt/ztab/deploy
+  runuser -u ztab -- sh -c 'echo "ZTAB_LIGHTWALLETD_URL=https://<other-host>:443" >> .env'
+  runuser -u ztab -- docker compose up -d watcher
+  ```
+
+  `up -d watcher` recreates only the watcher (its wallet in `watcher_data` is kept). To go back, delete that line from `.env` and run the same `up -d watcher`.
 - **Reboot test**: `ssh root@<ip> reboot`, wait a minute, then `ssh root@<ip> 'cd /opt/ztab/deploy && bash ./smoke.sh'` again. `ssh root@<ip> 'systemctl status ztab.service'` shows the unit.

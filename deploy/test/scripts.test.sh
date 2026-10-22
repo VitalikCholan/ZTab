@@ -38,6 +38,7 @@ test_init_env() {
   [ "$(envval "$d/.env" DOMAIN)" = "example.org" ] && [ "$(envval "$d/.env" ACME_EMAIL)" = "a@b.c" ] \
     && pass "init-env: DOMAIN and ACME_EMAIL from env" || fail "init-env: DOMAIN and ACME_EMAIL from env"
   [ "$(envval "$d/.env" IMAGE_TAG)" = "main" ] && pass "init-env: IMAGE_TAG kept from example" || fail "init-env: IMAGE_TAG kept from example"
+  grep -q '^# ZTAB_LIGHTWALLETD_URL=' "$d/.env" && pass "init-env: keeps the commented ZTAB_LIGHTWALLETD_URL line" || fail "init-env: keeps the commented ZTAB_LIGHTWALLETD_URL line"
   [ "$out1" = "deploy/.env written" ] && pass "init-env: prints only 'deploy/.env written'" || fail "init-env: prints only 'deploy/.env written'" "$out1"
   cp "$d/.env" "$ROOT/env.before"
   out2="$(DOMAIN=other.org ACME_EMAIL=x@y.z bash "$DEPLOY/init-env.sh" "$d" 2>&1 </dev/null)"
