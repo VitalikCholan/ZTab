@@ -130,6 +130,9 @@ test('api is proxied', async ({ request }) => {
   const body = await status.json();
   expect(body.network).toBe('test');
   expect(['ok', 'stale', 'down']).toContain(body.watcher);
+  // The watcher's /v1/health answers 200 as soon as it binds, so 'down' here means the API
+  // cannot reach the watcher at all (miswired URL or token), not a slow first sync.
+  expect(body.watcher).not.toBe('down');
 });
 
 test('http redirects; HSTS only on real domains', async ({ request }) => {

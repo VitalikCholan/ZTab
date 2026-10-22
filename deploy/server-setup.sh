@@ -60,7 +60,7 @@ systemctl enable --now docker
 echo "== firewall, fail2ban, automatic security updates"
 ufw allow 22,80,443/tcp
 ufw --force enable </dev/null
-systemctl enable --now fail2ban
+systemctl enable --now fail2ban || echo "warning: fail2ban did not start" >&2
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
   >/etc/apt/apt.conf.d/20auto-upgrades
 
