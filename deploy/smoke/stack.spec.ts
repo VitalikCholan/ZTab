@@ -103,6 +103,13 @@ test('assets are immutable, index is no-cache', async ({ request }) => {
   expect(asset.status()).toBe(200);
   expect(asset.headers()['cache-control']).toBe('public, max-age=31536000, immutable');
 
+  // No SPA fallback under /assets/: a chunk removed by a redeploy must 404, never come back
+  // as index.html cached for a year (nosniff would then break the module load on old tabs).
+  const missing = await request.get(`${BASE}/assets/does-not-exist.js`);
+  expect(missing.status()).toBe(404);
+  expect(missing.headers()['cache-control'] ?? '').not.toContain('immutable');
+  expect(await missing.text()).not.toContain('<title>ZTab</title>');
+
   for (const p of ['/sw.js', '/manifest.webmanifest', '/registerSW.js']) {
     const r = await request.get(`${BASE}${p}`);
     expect(r.status(), p).toBe(200);

@@ -45,15 +45,25 @@
 			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
 			X-Content-Type-Options nosniff
 		}
-		# Hashed bundles never change; everything else (index.html and every SPA deep link that
-		# falls back to it, sw.js, registerSW.js, the manifest, icons) is revalidated.
-		@immutable path /assets/*
-		header @immutable Cache-Control "public, max-age=31536000, immutable"
-		@revalidate not path /assets/*
-		header @revalidate Cache-Control no-cache
-
 		root * /srv/pwa
-		try_files {path} /index.html
-		file_server
+		# Hashed bundles that exist never change. A missing one (removed by a redeploy) gets a
+		# plain 404: no SPA fallback and no cache header, so an old tab never caches HTML as JS.
+		@immutable {
+			path /assets/*
+			file
+		}
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		# Everything else (index.html and every SPA deep link that falls back to it, sw.js,
+		# registerSW.js, the manifest, icons) is revalidated.
+		@spa not path /assets/*
+		header @spa Cache-Control no-cache
+
+		handle /assets/* {
+			file_server
+		}
+		handle {
+			try_files {path} /index.html
+			file_server
+		}
 	}
 }
