@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main, infra]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  crypto:
+    name: crypto (TS + Rust)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.98
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crypto/rust -> target
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ztab/crypto typecheck
+      - run: pnpm --filter @ztab/crypto test
+      # #[ignore]d tests stay skipped (default cargo test).
+      - run: cargo test --locked --manifest-path crypto/rust/Cargo.toml
+
+  watcher:
+    name: watcher (tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: watcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: watcher -> target
+      # Live testnet tests are #[ignore]d; plain `cargo test` never runs them.
+      - run: cargo test --locked
+
+  watcher-lint:
+    name: watcher (fmt + clippy, advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: watcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: watcher -> target
+          key: lint
+      - run: cargo fmt --check
+      - run: cargo clippy --locked -- -D warnings
+
+  api:
+    name: api (unit + e2e)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Same database the api's docker-compose.test.yml provides locally; test/global-setup.ts
+    # runs `prisma migrate deploy` against it.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ztab_test
+          POSTGRES_USER: ztab
+          POSTGRES_PASSWORD: ztab
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U ztab -d ztab_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ztab/api typecheck
+      - run: pnpm --filter @ztab/api test
+      - run: pnpm --filter @ztab/api test:e2e
+
+  pwa:
+    name: pwa (unit, build, e2e)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # No service container: the Playwright harness (e2e/harness/start.ts) runs the api's
+    # `db:up` (docker compose, Postgres on 55432) itself.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ztab/pwa typecheck
+      - run: pnpm --filter @ztab/pwa test
+      - run: pnpm --filter @ztab/pwa build
+      - run: pnpm --filter @ztab/pwa exec playwright install --with-deps chromium
+      - run: pnpm --filter @ztab/pwa e2e
+      - name: Harness logs on failure
+        if: failure()
+        run: tail -n 100 pwa/e2e/.harness/*.log || true
+
+  deploy:
+    name: deploy (scripts + rehearsal)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: shellcheck --version
+      - run: shellcheck -x deploy/*.sh deploy/test/*.sh
+      - run: bash deploy/test/scripts.test.sh
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ztab/pwa exec playwright install --with-deps chromium
+      # Builds the three images on the runner, brings the stack up on https://localhost,
+      # runs deploy/smoke, tears down. Prints compose ps + filtered logs on failure.
+      - run: bash deploy/rehearsal.sh
