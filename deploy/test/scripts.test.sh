@@ -94,6 +94,7 @@ make_repo() { # make_repo <name>: bare origin + clone with deploy/ scripts, a st
   mkdir -p "$c/deploy"
   cp "$DEPLOY/update.sh" "$c/deploy/update.sh"
   printf '#!/usr/bin/env bash\necho smoke-ran >>"$FAKE_DOCKER_LOG"\n' >"$c/deploy/smoke.sh"
+  printf '{$DOMAIN} {\n}\n' >"$c/deploy/Caddyfile"
   printf 'DOMAIN=example.org\nIMAGE_TAG=main\nWATCHER_TOKEN=%s\n' "$(printf 'ab%.0s' $(seq 32))" >"$c/deploy/.env"
   chmod 600 "$c/deploy/.env"
   (
@@ -101,7 +102,7 @@ make_repo() { # make_repo <name>: bare origin + clone with deploy/ scripts, a st
     git config user.email t@example.org
     git config user.name t
     printf '.env\n' >.gitignore
-    git add .gitignore deploy/update.sh deploy/smoke.sh
+    git add .gitignore deploy/update.sh deploy/smoke.sh deploy/Caddyfile
     git commit -q -m init
     git push -q origin HEAD 2>/dev/null
     git branch -q --set-upstream-to="origin/$(git rev-parse --abbrev-ref HEAD)" 2>/dev/null
@@ -147,6 +148,29 @@ test_update() {
   grep -q 'up' "$log" && fail "update: failed pull does not run up" || pass "update: failed pull does not run up"
   [ "$(envval "$c/deploy/.env" IMAGE_TAG)" = "main" ] && pass "update: failed pull keeps the previous IMAGE_TAG" || fail "update: failed pull keeps the previous IMAGE_TAG" "$(envval "$c/deploy/.env" IMAGE_TAG)"
   grep -q smoke-ran "$log" && fail "update: failed pull does not run smoke" || pass "update: failed pull does not run smoke"
+
+  # upstream commit that changes the Caddyfile: caddy is restarted after up -d, before smoke
+  push_change updcaddy deploy/Caddyfile
+  log="$ROOT/updcaddy.log"; : >"$log"
+  out="$(cd "$ROOT/updcaddy/deploy" && PATH="$FAKEBIN:$PATH" FAKE_DOCKER_LOG="$log" bash ./update.sh 2>&1)"; rc=$?
+  want="$(printf 'compose pull\ncompose up -d --remove-orphans\ncompose restart caddy\nsmoke-ran')"
+  [ "$rc" = 0 ] && [ "$(cat "$log")" = "$want" ] && pass "update: Caddyfile change upstream -> compose restart caddy after up" || fail "update: Caddyfile change upstream -> compose restart caddy after up" "$rc: $(tr '\n' '|' <"$log")"
+
+  # upstream commit that leaves the Caddyfile alone: no restart
+  push_change updnocaddy deploy/marker
+  log="$ROOT/updnocaddy.log"; : >"$log"
+  out="$(cd "$ROOT/updnocaddy/deploy" && PATH="$FAKEBIN:$PATH" FAKE_DOCKER_LOG="$log" bash ./update.sh 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && [ -e "$ROOT/updnocaddy/deploy/marker" ] && ! grep -q 'restart' "$log" && pass "update: no Caddyfile change -> no caddy restart" || fail "update: no Caddyfile change -> no caddy restart" "$rc: $(tr '\n' '|' <"$log")"
+}
+
+push_change() { # push_change <name> <file>: make_repo <name>, then push a commit touching <file> from a second clone
+  make_repo "$1"
+  git clone -q "$ROOT/$1.git" "$ROOT/$1-other" 2>/dev/null
+  (
+    cd "$ROOT/$1-other" || exit 1
+    git config user.email t@example.org; git config user.name t
+    echo "# changed" >>"$2"; git add "$2"; git commit -q -m change; git push -q origin HEAD 2>/dev/null
+  )
 }
 
 # ---------------------------------------------------------------- smoke
