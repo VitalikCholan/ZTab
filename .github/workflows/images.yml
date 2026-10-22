@@ -13,6 +13,11 @@ permissions:
   contents: read
   packages: write
 
+# One publish at a time per ref, so a late run cannot interleave with a newer one.
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     # workflow_run fires for every CI completion on main; publish only green ones.
@@ -36,6 +41,22 @@ jobs:
               VITE_NETWORK=test
     steps:
       - uses: actions/checkout@v7
+        with:
+          # workflow_run: build the commit CI actually tested, not the current tip of main.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - id: ver
+        env:
+          BUILT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          TIP_SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          echo "short=${BUILT_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          # The floating `main` tag only moves for the commit that is still the tip of main.
+          main=false
+          if [ "$EVENT" = workflow_run ] && [ "$BUILT_SHA" = "$TIP_SHA" ]; then main=true; fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" = refs/heads/main ]; then main=true; fi
+          echo "main=$main" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -47,8 +68,8 @@ jobs:
         with:
           images: ghcr.io/vitalikcholan/ztab-${{ matrix.image }}
           tags: |
-            type=raw,value=main,enable={{is_default_branch}}
-            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ steps.ver.outputs.main }}
+            type=raw,value=sha-${{ steps.ver.outputs.short }}
             type=ref,event=tag
       - uses: docker/build-push-action@v7
         with:
