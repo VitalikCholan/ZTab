@@ -20,8 +20,17 @@ concurrency:
 
 jobs:
   publish:
-    # workflow_run fires for every CI completion on main; publish only green ones.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # workflow_run runs with write permissions and checks out head_sha, so it must only
+    # accept CI runs of a push to main in THIS repo. The `branches: [main]` trigger filter
+    # matches the head branch NAME only: a fork PR from a branch called `main` would
+    # otherwise publish attacker code to GHCR and poison the build cache.
+    # Tag pushes and manual dispatch are trusted refs and stay allowed.
+    if: >-
+      github.event_name != 'workflow_run' || (
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
