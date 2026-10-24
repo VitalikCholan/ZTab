@@ -21,20 +21,39 @@ interface Recorded {
   body: string;
 }
 
+/**
+ * How long, once the flow is done, a request's full (raw) headers may still take to arrive.
+ * `Request.allHeaders()` waits, with no timeout, for Chromium's raw-headers event, and settles
+ * early only if the page or service worker closes. Some requests never get that event: a fetch
+ * the `/` page starts just before the test navigates to /new (no response, finished or failed
+ * event ever follows), or the service worker's own `/sw.js` script fetch (finished, raw headers
+ * never paired). Their pages stay open, so awaiting `allHeaders()` hung the test until its
+ * 30 s timeout. Every request settles in milliseconds here; the bound only cuts off those.
+ */
+const FULL_HEADERS_GRACE_MS = 2_000;
+
 test.describe('privacy', { tag: '@desktop' }, () => {
   test.beforeEach(() => stub.reset());
 
   for (const mode of ['Group', 'Individual'] as const) {
     test(`${mode.toLowerCase()} tab: secrets stay in the browser`, async ({ page, context }) => {
       await recordCopies(page);
-      const pending: Promise<Recorded>[] = [];
-      const record = async (r: Request): Promise<Recorded> => ({
-        method: r.method(),
-        url: r.url(),
-        headers: await r.allHeaders().catch(() => r.headers()),
-        body: r.postData() ?? '',
-      });
-      context.on('request', (r) => pending.push(record(r)));
+      // Everything but the full headers is captured synchronously, so no request can escape the
+      // checks below. Headers are the request's provisional ones (every header the page itself
+      // set, plus the browser's), upgraded to the full raw set when Chromium delivers it; the raw
+      // set adds only network-layer headers (Host, Connection, Accept-Encoding, Cookie). The one
+      // of those a page could put data into, Cookie, is covered by the no-cookies check below.
+      const pending: { recorded: Recorded; full: Promise<Record<string, string> | null> }[] = [];
+      context.on('request', (r: Request) =>
+        pending.push({
+          recorded: { method: r.method(), url: r.url(), headers: r.headers(), body: r.postData() ?? '' },
+          // Rejects when the request's page has closed (the link page); the provisional set stands.
+          full: r.allHeaders().then(
+            (h) => h,
+            () => null,
+          ),
+        }),
+      );
 
       const titles: string[] = [];
       const checkPage = async (p: Page) => {
@@ -49,32 +68,54 @@ test.describe('privacy', { tag: '@desktop' }, () => {
       };
 
       const names = ['Alice', 'Bob'];
-      await page.goto('/');
-      await checkPage(page);
-      const { tabId, adminUrl, links } = await createViaForm(page, { title: 'Dinner', total: '50.00', names, mode });
-      await checkPage(page);
+      const { tabId, adminUrl, links } = await test.step('create the tab', async () => {
+        await page.goto('/');
+        await checkPage(page);
+        const created = await createViaForm(page, { title: 'Dinner', total: '50.00', names, mode });
+        await checkPage(page);
+        return created;
+      });
 
-      // The shared link, opened by its recipient (a second tab in the same browser).
-      const linkPage = await context.newPage();
-      await linkPage.goto(links[mode === 'Group' ? 0 : 1]);
-      await expect(linkPage.getByRole('heading', { name: 'Dinner' })).toBeVisible({ timeout: 10_000 });
-      await expect(linkPage).toHaveURL(`/t/${tabId}`);
-      await checkPage(linkPage);
-      await linkPage.close();
+      await test.step('open the shared link', async () => {
+        // Opened by its recipient (a second tab in the same browser).
+        const linkPage = await context.newPage();
+        await linkPage.goto(links[mode === 'Group' ? 0 : 1]);
+        await expect(linkPage.getByRole('heading', { name: 'Dinner' })).toBeVisible({ timeout: 10_000 });
+        await expect(linkPage).toHaveURL(`/t/${tabId}`);
+        await checkPage(linkPage);
+        await linkPage.close();
+      });
 
-      // The admin page, from the links screen (in-memory session) and from the saved admin link.
-      await openAdminPage(page, tabId);
-      await expect(page.getByRole('button', { name: /Nothing to withdraw yet|Withdraw/ })).toBeVisible({ timeout: 10_000 });
-      await checkPage(page);
-      const adminPage = await context.newPage();
-      await adminPage.goto(adminUrl);
-      await expect(adminPage.getByRole('heading', { name: 'Dinner' })).toBeVisible({ timeout: 10_000 });
-      await expect(adminPage).toHaveURL(`/t/${tabId}`);
-      await checkPage(adminPage);
+      await test.step('open the admin page', async () => {
+        // From the links screen (in-memory session) and from the saved admin link.
+        await openAdminPage(page, tabId);
+        await expect(page.getByRole('button', { name: /Nothing to withdraw yet|Withdraw/ })).toBeVisible({ timeout: 10_000 });
+        await checkPage(page);
+        const adminPage = await context.newPage();
+        await adminPage.goto(adminUrl);
+        await expect(adminPage.getByRole('heading', { name: 'Dinner' })).toBeVisible({ timeout: 10_000 });
+        await expect(adminPage).toHaveURL(`/t/${tabId}`);
+        await checkPage(adminPage);
+      });
 
       expect(titles.every((t) => t === 'ZTab')).toBe(true);
 
-      const requests = await Promise.all(pending);
+      const requests = await test.step('collect request headers', async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const grace = new Promise<null>((done) => (timer = setTimeout(() => done(null), FULL_HEADERS_GRACE_MS)));
+        const settled = await Promise.all(
+          pending.map(async ({ recorded, full }) => {
+            const headers = await Promise.race([full, grace]);
+            if (headers) return { ...recorded, headers };
+            test.info().annotations.push({ type: 'provisional headers only', description: `${recorded.method} ${recorded.url}` });
+            return recorded;
+          }),
+        );
+        clearTimeout(timer);
+        return settled;
+      });
+      // No cookie (set by script or by a response) could have carried anything in a Cookie header.
+      expect(await context.cookies()).toEqual([]);
       const http = requests.filter((r) => /^https?:/.test(r.url));
       expect(http.length).toBeGreaterThan(0);
       expect(http.some((r) => r.method === 'PUT' && r.url === `http://127.0.0.1:3000/tabs/${tabId}`)).toBe(true);
