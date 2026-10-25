@@ -2,4 +2,75 @@
 
 @theme {
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  --color-bg: #0d0f14;
+  --color-glow: #2a2210;
+  --color-surface: rgb(255 255 255 / 0.04);
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-fg: #e8e6e1;
+  --color-muted: #9a978f;
+  --color-accent: #f4b728;
+  --color-accent-deep: #e9a812;
+  --color-on-accent: #1a1300;
+  --color-ok: #86efac;
+  --color-danger: #fca5a5;
+  --color-info: #93c5fd;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background-color: var(--color-bg);
+  }
+
+  body {
+    min-height: 100vh;
+    background-color: var(--color-bg);
+    background-image: radial-gradient(120% 60% at 50% 0%, var(--color-glow) 0%, var(--color-bg) 55%);
+    background-repeat: no-repeat;
+    color: var(--color-fg);
+  }
+}
+
+@utility btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-bold text-on-accent;
+  background-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-deep));
+  box-shadow: 0 6px 24px rgb(244 183 40 / 0.3);
+  @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+
+  &:disabled,
+  &[aria-disabled='true'] {
+    box-shadow: none;
+    @apply cursor-not-allowed opacity-40;
+  }
+}
+
+@utility btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl border border-line bg-transparent px-4 py-2.5 font-semibold text-fg;
+  @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+
+  &:hover:not(:disabled) {
+    border-color: rgb(255 255 255 / 0.2);
+  }
+
+  &:disabled,
+  &[aria-disabled='true'] {
+    @apply cursor-not-allowed opacity-40;
+  }
+}
+
+@utility card {
+  @apply rounded-2xl border border-line bg-surface p-4;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+@utility field {
+  @apply w-full rounded-xl border border-line bg-surface px-3 py-2 text-fg placeholder:text-muted;
+  @apply focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40;
+  @apply aria-[invalid=true]:border-danger;
+}
+
+@utility pill {
+  @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold;
 }
