@@ -52,6 +52,28 @@ export type GroupBlob = z.infer<typeof groupBlobV1>;
 export type ParticipantBlob = z.infer<typeof participantBlobV1>;
 export type BlobParticipant = z.infer<typeof participantRow>;
 
+/** The group blob is the admin blob without the withdraw address. */
+export function groupBlobFromAdmin(admin: AdminBlob): GroupBlob {
+  const { withdraw_address: _withdraw, ...group } = admin;
+  return group;
+}
+
+/** The participant blob for row `index` of the admin blob. */
+export function participantBlobFromAdmin(admin: AdminBlob, index: number): ParticipantBlob {
+  const r = admin.participants[index];
+  return {
+    v: 1,
+    title: admin.title,
+    index: r.index,
+    name: r.name,
+    share_cents: r.share_cents,
+    share_zat: r.share_zat,
+    address: r.address,
+    rate_usd_per_zec: admin.rate_usd_per_zec,
+    mode: admin.mode,
+  };
+}
+
 export class BlobError extends Error {
   readonly code: 'decrypt_failed' | 'invalid_blob';
 

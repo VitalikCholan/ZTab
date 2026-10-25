@@ -4,7 +4,9 @@ import {
   deriveToken,
   encodeToken,
   hashToken,
+  blobCommit,
   hkdf32,
+  openBlob,
   importBlobKey,
   INFO,
   parseFragment,
@@ -12,7 +14,7 @@ import {
 } from '@ztab/crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { ApiClient, ApiRequestError, type CreateTabBody } from '../../src/api/client.ts';
-import { adminBlobV1, groupBlobV1, openTyped, participantBlobV1 } from '../../src/tab/blobs.ts';
+import { fromBase64, adminBlobV1, groupBlobV1, openTyped, participantBlobV1 } from '../../src/tab/blobs.ts';
 import { AddressMismatchError, CreateNetworkError, createTab, type CreateInput } from '../../src/tab/create.ts';
 import { centsToZat } from '../../src/domain/money.ts';
 import { json } from '../helpers/fixtures.ts';
@@ -70,6 +72,26 @@ const keyOf = (f: Fragment) => (f.kind === 'admin' ? f.master : f.key);
 beforeAll(loadTestWasm);
 
 describe('createTab', () => {
+  it('group link carries the commitment of the sealed group blob', async () => {
+    const { api, puts } = mockApi((b) => honest(b));
+    const out = await createTab(input('group'), { api, network: 'test', now: () => NOW, origin: ORIGIN });
+    const f = parseFragment(new URL(out.participantLinks[0].url).hash);
+    if (f.kind !== 'group') throw new Error('expected group');
+    const opened = await openBlob(await importBlobKey(f.key), fromBase64(puts[0].body.blobs.group!)!);
+    expect(Array.from(f.commit)).toEqual(Array.from(await blobCommit(opened)));
+  });
+
+  it('every participant link carries the commitment of its sealed blob', async () => {
+    const { api, puts } = mockApi((b) => honest(b));
+    const out = await createTab(input('individual'), { api, network: 'test', now: () => NOW, origin: ORIGIN });
+    for (const link of out.participantLinks) {
+      const f = parseFragment(new URL(link.url).hash);
+      if (f.kind !== 'participant') throw new Error('expected participant');
+      const opened = await openBlob(await importBlobKey(f.key), fromBase64(puts[0].body.blobs.participants![link.index])!);
+      expect(Array.from(f.commit)).toEqual(Array.from(await blobCommit(opened)));
+    }
+  });
+
   it('individual: 201 flow yields admin + n participant URLs matching the hashes and blobs sent', async () => {
     const { api, puts } = mockApi((b) => honest(b));
     const out = await createTab(input('individual'), { api, network: 'test', now: () => NOW, origin: ORIGIN });

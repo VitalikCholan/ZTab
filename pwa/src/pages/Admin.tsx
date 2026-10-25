@@ -45,19 +45,17 @@ function useBlockInterval(): number {
 /** Participant (or group) links re-derived from the master. Only the URL strings are kept. */
 function useParticipantUrls(session: Session, blob: AdminBlob | null): string[] | null {
   const [urls, setUrls] = useState<string[] | null>(null);
-  const mode = blob?.mode;
-  const n = blob?.participants.length;
   useEffect(() => {
-    if (!session.master || !mode || !n) return;
+    if (!session.master || !blob) return;
     let alive = true;
-    adminLinks(session.master, session.tabId, mode, n, window.location.origin).then(
+    adminLinks(session.master, session.tabId, blob, window.location.origin).then(
       (l) => alive && setUrls(l.participantUrls),
       () => {},
     );
     return () => {
       alive = false;
     };
-  }, [session, mode, n]);
+  }, [session, blob]);
   return urls;
 }
 

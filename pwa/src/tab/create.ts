@@ -1,4 +1,5 @@
 import {
+  blobCommit,
   createMaster,
   deriveAddress,
   deriveTabAccount,
@@ -11,7 +12,7 @@ import {
 } from '@ztab/crypto';
 import { ApiClient, ApiRequestError, type CreateTabBody, type CreateTabResult } from '../api/client.ts';
 import { centsToZat } from '../domain/money.ts';
-import { toBase64, type AdminBlob, type BlobParticipant, type GroupBlob, type ParticipantBlob } from './blobs.ts';
+import { groupBlobFromAdmin, participantBlobFromAdmin, toBase64, type AdminBlob, type BlobParticipant, type GroupBlob, type ParticipantBlob } from './blobs.ts';
 import { tabUrl, zeroTabKeys } from './keys.ts';
 
 export interface CreateInput {
@@ -112,17 +113,28 @@ export async function createTab(input: CreateInput, deps: CreateDeps): Promise<C
     throw e;
   }
 
-  const { body, addresses, rows } = built;
+  const { body, addresses, participantBlobs, commits } = built;
   const finish = (result: CreateTabResult): CreatedTab => {
     try {
       checkAddresses(result, addresses);
       const adminUrl = tabUrl(origin, tabId, { kind: 'admin', master });
       const participantLinks: ParticipantLink[] = keys.group
-        ? [{ index: -1, name: 'Everyone', url: tabUrl(origin, tabId, { kind: 'group', key: keys.group.raw }) }]
-        : rows.map((r, i) => ({
-            index: r.index,
-            name: r.name,
-            url: tabUrl(origin, tabId, { kind: 'participant', index: r.index, key: keys.participants![i].raw }),
+        ? [
+            {
+              index: -1,
+              name: 'Everyone',
+              url: tabUrl(origin, tabId, { kind: 'group', key: keys.group.raw, commit: commits.group! }),
+            },
+          ]
+        : participantBlobs.map((b, i) => ({
+            index: b.index,
+            name: b.name,
+            url: tabUrl(origin, tabId, {
+              kind: 'participant',
+              index: b.index,
+              key: keys.participants![i].raw,
+              commit: commits.participants![i],
+            }),
           }));
       done = true;
       zeroTabKeys(keys);
@@ -166,7 +178,9 @@ export async function createTab(input: CreateInput, deps: CreateDeps): Promise<C
 interface Built {
   body: CreateTabBody;
   addresses: string[];
-  rows: BlobParticipant[];
+  participantBlobs: ParticipantBlob[];
+  /** Reader-link commitments: `group` in group mode, `participants` in individual mode. */
+  commits: { group?: Uint8Array; participants?: Uint8Array[] };
 }
 
 /** Derives the UFVK and local addresses (zeroing the spend key at once), seals the blobs, hashes the tokens. */
@@ -184,14 +198,14 @@ async function buildBody(
   const { ufvk } = account;
   const addresses = Array.from({ length: n }, (_, i) => deriveAddress(network, ufvk, i));
 
-  const rows = input.participants.map((p, index) => ({
+  const rows: BlobParticipant[] = input.participants.map((p, index) => ({
     index,
     name: p.name,
     share_cents: p.shareCents,
     share_zat: centsToZat(p.shareCents, input.usdPerZec),
     address: addresses[index],
   }));
-  const group: GroupBlob = {
+  const admin: AdminBlob = {
     v: 1,
     title: input.title,
     currency: 'USD',
@@ -201,8 +215,8 @@ async function buildBody(
     mode: input.mode,
     participants: rows,
     created_at: createdAt,
+    withdraw_address: input.withdrawAddress,
   };
-  const admin: AdminBlob = { ...group, withdraw_address: input.withdrawAddress };
   const seal = async (key: Parameters<typeof sealBlob>[0], value: unknown) => toBase64(await sealBlob(key, value));
 
   const body: CreateTabBody = {
@@ -213,31 +227,22 @@ async function buildBody(
     blobs: { admin: await seal(keys.admin, admin) },
     token_hashes: { admin: await hashToken(keys.tokens.admin) },
   };
+  const commits: Built['commits'] = {};
+  let participantBlobs: ParticipantBlob[] = [];
   if (keys.group && keys.tokens.group) {
+    const group: GroupBlob = groupBlobFromAdmin(admin);
     body.blobs.group = await seal(keys.group, group);
+    commits.group = await blobCommit(group);
     body.token_hashes.group = await hashToken(keys.tokens.group);
   } else {
     const pKeys = keys.participants ?? [];
     const pTokens = keys.tokens.participants ?? [];
-    body.blobs.participants = await Promise.all(
-      rows.map((r, i) => {
-        const blob: ParticipantBlob = {
-          v: 1,
-          title: input.title,
-          index: r.index,
-          name: r.name,
-          share_cents: r.share_cents,
-          share_zat: r.share_zat,
-          address: r.address,
-          rate_usd_per_zec: input.usdPerZec,
-          mode: input.mode,
-        };
-        return seal(pKeys[i], blob);
-      }),
-    );
+    participantBlobs = rows.map((_, i) => participantBlobFromAdmin(admin, i));
+    body.blobs.participants = await Promise.all(participantBlobs.map((b, i) => seal(pKeys[i], b)));
+    commits.participants = await Promise.all(participantBlobs.map((b) => blobCommit(b)));
     body.token_hashes.participants = await Promise.all(pTokens.map((t) => hashToken(t)));
   }
-  return { body, addresses, rows };
+  return { body, addresses, participantBlobs, commits };
 }
 
 function checkAddresses(result: CreateTabResult, local: string[]): void {

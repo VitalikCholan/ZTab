@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { importBlobKey, sealBlob, toBase64Url } from '@ztab/crypto';
+import { encodeFragment, importBlobKey, sealBlob, toBase64Url } from '@ztab/crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hex, hkdfFixture, json } from '../helpers/fixtures.ts';
 import { toBase64 } from '../../src/tab/blobs.ts';
@@ -14,6 +14,7 @@ vi.mock('../../src/wasm.ts', () => ({
 
 const { tabId } = hkdfFixture;
 const keyBytes = hex(hkdfFixture.participantKeyHex['1']);
+const P_HASH = encodeFragment({ kind: 'participant', index: 1, key: keyBytes, commit: new Uint8Array(16).fill(7) });
 const PATH = `/t/${tabId}`;
 const BLOB = {
   v: 1, title: 'Dinner', index: 1, name: 'Bob', share_cents: 2500, share_zat: 62111801,
@@ -42,7 +43,7 @@ beforeEach(async () => {
   document.title = 'ZTab';
   blobB64 = toBase64(await sealBlob(await importBlobKey(keyBytes), BLOB));
   vi.stubGlobal('fetch', vi.fn(async () => json(200, view())));
-  window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+  window.history.replaceState(null, '', `${PATH}${P_HASH}`);
   secure = Object.getOwnPropertyDescriptor(window, 'isSecureContext');
   Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
 });
@@ -112,7 +113,7 @@ describe('TabEntry', () => {
     expect(await screen.findByText('This tab does not exist or the link is wrong.')).toBeInTheDocument();
     r.unmount();
     vi.stubGlobal('fetch', vi.fn(async () => json(429, { error: { code: 'rate_limited', message: 'x' } })));
-    window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+    window.history.replaceState(null, '', `${PATH}${P_HASH}`);
     vi.resetModules();
     await mount();
     expect(await screen.findByText('Too many requests from your network, wait a minute.')).toBeInTheDocument();
@@ -173,7 +174,7 @@ describe('TabEntry', () => {
         r.unmount();
 
         vi.resetModules();
-        window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+        window.history.replaceState(null, '', `${PATH}${P_HASH}`);
         const f429 = vi.fn(async () => e429());
         vi.stubGlobal('fetch', f429);
         await mount();
@@ -209,7 +210,7 @@ describe('a link pasted into the open tab (same-document fragment navigation)', 
   it('the new hash wins over the stored session, which is zeroed', async () => {
     const { sessionStore, admin } = await mountAdmin();
     const adminToken = admin.token;
-    paste(`#p=1.${toBase64Url(keyBytes)}`);
+    paste(P_HASH);
     expect(await screen.findByText('Hi, Bob')).toBeInTheDocument();
     expect(window.location.hash).toBe('');
     expect(sessionStore.get(tabId)?.role).toBe('participant');
@@ -234,7 +235,7 @@ describe('useTab refresh', () => {
     vi.stubGlobal('fetch', f);
     const { useTab } = await import('../../src/hooks/useTab.ts');
     const { sessionFromFragment } = await import('../../src/tab/keys.ts');
-    const session = await sessionFromFragment(tabId, `p=1.${toBase64Url(keyBytes)}`, window.location.origin);
+    const session = await sessionFromFragment(tabId, P_HASH, window.location.origin);
     const { renderHook, act } = await import('@testing-library/react');
     const { result } = renderHook(() => useTab(session, 10000));
     await waitFor(() => expect(result.current.error?.status).toBe(404));

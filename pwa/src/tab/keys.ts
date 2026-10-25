@@ -1,5 +1,6 @@
 import {
   INFO,
+  blobCommit,
   deriveTabKeys,
   deriveToken,
   encodeFragment,
@@ -11,6 +12,7 @@ import {
   type TabKeys,
   type TabMode,
 } from '@ztab/crypto';
+import { groupBlobFromAdmin, participantBlobFromAdmin, type AdminBlob } from './blobs.ts';
 
 /** Everything a page needs to talk about one tab, derived from the link fragment. Memory only. */
 export type Session = {
@@ -20,6 +22,8 @@ export type Session = {
   index?: number;
   /** Admin role only: stays in memory while the admin page is open. */
   master?: Uint8Array;
+  /** Group/participant only: first 16 bytes of the blob digest, from the link fragment. */
+  commit?: Uint8Array;
   blobKey: BlobKey;
   /** API token for `Authorization: Bearer`. */
   token: Uint8Array;
@@ -45,8 +49,8 @@ export async function sessionFromFragment(tabId: string, fragment: string, origi
   const token = await deriveToken(f.key, tabId);
   f.key.fill(0);
   return f.kind === 'group'
-    ? { tabId, role: 'group', blobKey, token, fullUrl }
-    : { tabId, role: 'participant', index: f.index, blobKey, token, fullUrl };
+    ? { tabId, role: 'group', commit: f.commit, blobKey, token, fullUrl }
+    : { tabId, role: 'participant', index: f.index, commit: f.commit, blobKey, token, fullUrl };
 }
 
 /**
@@ -56,16 +60,26 @@ export async function sessionFromFragment(tabId: string, fragment: string, origi
 export async function adminLinks(
   master: Uint8Array,
   tabId: string,
-  mode: TabMode,
-  n: number,
+  admin: AdminBlob,
   origin: string,
 ): Promise<{ adminUrl: string; participantUrls: string[] }> {
-  const keys = await deriveTabKeys(master, tabId, mode, n);
+  const keys = await deriveTabKeys(master, tabId, admin.mode, admin.participants.length);
   try {
     const adminUrl = tabUrl(origin, tabId, { kind: 'admin', master });
-    const participantUrls = keys.group
-      ? [tabUrl(origin, tabId, { kind: 'group', key: keys.group.raw })]
-      : (keys.participants ?? []).map((k, index) => tabUrl(origin, tabId, { kind: 'participant', index, key: k.raw }));
+    if (keys.group) {
+      const commit = await blobCommit(groupBlobFromAdmin(admin));
+      return { adminUrl, participantUrls: [tabUrl(origin, tabId, { kind: 'group', key: keys.group.raw, commit })] };
+    }
+    const participantUrls = await Promise.all(
+      (keys.participants ?? []).map(async (k, index) =>
+        tabUrl(origin, tabId, {
+          kind: 'participant',
+          index,
+          key: k.raw,
+          commit: await blobCommit(participantBlobFromAdmin(admin, index)),
+        }),
+      ),
+    );
     return { adminUrl, participantUrls };
   } finally {
     zeroTabKeys(keys);
@@ -86,5 +100,6 @@ export function zeroTabKeys(keys: TabKeys): void {
 export function zeroSession(s: Session): void {
   s.token.fill(0);
   s.master?.fill(0);
+  s.commit?.fill(0);
   s.blobKey.raw.fill(0);
 }

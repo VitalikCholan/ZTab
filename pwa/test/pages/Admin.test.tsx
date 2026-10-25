@@ -75,8 +75,8 @@ beforeEach(() => {
   w.signAndBroadcast.mockReset();
   apiMock.sweepStatus.mockReset();
   apiMock.status.mockReset().mockResolvedValue({ block_interval_seconds: 75 });
-  keys.adminLinks.mockReset().mockImplementation(async (_m: Uint8Array, _t: string, mode: string) =>
-    ({ adminUrl: ADMIN_URL, participantUrls: mode === 'group' ? [G_URL] : P_URLS }));
+  keys.adminLinks.mockReset().mockImplementation(async (_m: Uint8Array, _t: string, admin: { mode: string }) =>
+    ({ adminUrl: ADMIN_URL, participantUrls: admin.mode === 'group' ? [G_URL] : P_URLS }));
   config.explorerTxUrl = null;
 });
 afterEach(cleanup);
@@ -149,7 +149,7 @@ describe('Admin page', () => {
         text: `Bob, your share of “Dinner” is $12.50 (≈ 0.3125 ZEC): ${P_URLS[1]}`,
         url: P_URLS[1],
       });
-      expect(keys.adminLinks).toHaveBeenCalledWith(master, 't', 'individual', 4, window.location.origin);
+      expect(keys.adminLinks).toHaveBeenCalledWith(master, 't', expect.objectContaining({ mode: 'individual' }), window.location.origin);
     } finally {
       vi.unstubAllGlobals();
     }
