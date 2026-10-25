@@ -29,6 +29,19 @@ export function Landing() {
       <Link to="/new" className="w-fit rounded bg-neutral-900 px-4 py-2 font-medium text-white">
         Create a tab
       </Link>
+      {config.network === 'test' && (
+        <p className="text-sm text-neutral-600">
+          Paying needs a Zcash testnet wallet, e.g. Vizor Testnet.{' '}
+          <a
+            href="https://fauzec.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+          >
+            Get free testnet ZEC (TAZ)
+          </a>
+        </p>
+      )}
     </main>
   );
 }
