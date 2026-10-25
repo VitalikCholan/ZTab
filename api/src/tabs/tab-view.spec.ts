@@ -34,6 +34,7 @@ const watcher: WatcherTab = {
     pending_zat: 2,
     swept_zat: 3,
     min_unspent_confirmations: 4,
+    sweepable_zat: 7,
     extra: 'x',
   } as never,
 };
@@ -135,7 +136,7 @@ describe('buildTabView', () => {
     expect(JSON.stringify(all)).not.toContain('leak');
   });
 
-  it('admin and group carry balance, picked to the four fields', () => {
+  it('admin and group carry balance, picked to the documented fields', () => {
     for (const kind of ['admin', 'group'] as const) {
       const v = buildTabView(tab, addresses, blob, { kind }, watcher);
       expect(v.balance).toEqual({
@@ -143,8 +144,23 @@ describe('buildTabView', () => {
         pending_zat: 2,
         swept_zat: 3,
         min_unspent_confirmations: 4,
+        sweepable_zat: 7,
       });
     }
+  });
+
+  it('balance passes sweepable_zat through for admin and group, never participant', () => {
+    for (const kind of ['admin', 'group'] as const) {
+      expect(buildTabView(tab, addresses, blob, { kind }, watcher).balance?.sweepable_zat).toBe(7);
+    }
+    const v = buildTabView(tab, addresses, blob, { kind: 'participant', index: 0 }, watcher);
+    expect(JSON.stringify(v)).not.toContain('sweepable_zat');
+  });
+
+  it('omits sweepable_zat when an older watcher does not send it', () => {
+    const old = { ...watcher, balance: { spendable_zat: 1, pending_zat: 0, swept_zat: 0, min_unspent_confirmations: null } };
+    const v = buildTabView(tab, addresses, blob, { kind: 'admin' }, old);
+    expect('sweepable_zat' in v.balance!).toBe(false);
   });
 
   it('participant view has no balance key', () => {

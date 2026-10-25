@@ -222,6 +222,14 @@ async fn balance_reflects_unspent_notes_and_confirmations() {
     let want_spendable: u64 = notes.iter().filter(|n| deep(n.1)).map(|n| n.0).sum();
     let want_pending: u64 = notes.iter().filter(|n| !deep(n.1)).map(|n| n.0).sum();
     assert!(want_spendable > 0 && want_pending > 0, "{notes:?}");
+    let unspent: Vec<_> = notes
+        .iter()
+        .map(|n| ztab_watcher::facts::UnspentNote {
+            value_zat: n.0,
+            mined_height: Some(n.1),
+        })
+        .collect();
+    let want_sweepable = ztab_watcher::facts::plan_sweep(&unspent, tip, 10).output_zat;
 
     let (s, tab) = call(&state, "GET", &format!("/v1/tabs/{id}"), true, None).await;
     assert_eq!(s, 200);
@@ -232,6 +240,7 @@ async fn balance_reflects_unspent_notes_and_confirmations() {
             "pending_zat": want_pending,
             "swept_zat": 0,
             "min_unspent_confirmations": 5,
+            "sweepable_zat": want_sweepable,
         })
     );
 
@@ -242,6 +251,7 @@ async fn balance_reflects_unspent_notes_and_confirmations() {
         .store(0, std::sync::atomic::Ordering::Relaxed);
     let (_, tab) = call(&state, "GET", &format!("/v1/tabs/{id}"), true, None).await;
     assert_eq!(tab["balance"]["spendable_zat"], 0);
+    assert_eq!(tab["balance"]["sweepable_zat"], 0);
     assert_eq!(tab["balance"]["min_unspent_confirmations"], 0);
 }
 

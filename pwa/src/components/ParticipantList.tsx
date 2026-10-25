@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { TabView } from '../api/types.ts';
 import { centsToUsdString, zatToCents } from '../domain/money.ts';
+import { PAY_MESSAGE } from '../domain/zip321.ts';
 import { computeStatus, type Badge, type StatusResult } from '../domain/status.ts';
 import { isTouchPhone } from '../platform.ts';
 import type { BlobParticipant, GroupBlob } from '../tab/blobs.ts';
@@ -19,8 +20,9 @@ export interface RowStatus {
 const PAID: ReadonlySet<Badge> = new Set(['paid', 'paid_transparent', 'overpaid']);
 
 /** Per-participant status from the blob (truth for names, shares, addresses) and the API view. */
-export function rowStatuses(blob: GroupBlob, view: TabView): RowStatus[] {
+export function rowStatuses(blob: GroupBlob, view: TabView, verified = true): RowStatus[] {
   return blob.participants.map((participant) => {
+    if (!verified) return { participant, status: null, mismatch: true };
     const row = view.participants.find((p) => p.index === participant.index);
     if (!row) return { participant, status: null, mismatch: false };
     if (row.address !== participant.address) return { participant, status: null, mismatch: true };
@@ -50,6 +52,7 @@ export function ParticipantList({
   view,
   onPay,
   share,
+  verified = true,
 }: {
   blob: GroupBlob;
   view: TabView;
@@ -57,10 +60,12 @@ export function ParticipantList({
   onPay: () => void;
   /** Extra per-row control (the admin's Share link). */
   share?: (p: BlobParticipant) => ReactNode;
+  /** False: the blob does not match the link; every row is a mismatch. */
+  verified?: boolean;
 }) {
   const [open, setOpen] = useState<number | null>(null);
   const [phone] = useState(isTouchPhone);
-  const rows = rowStatuses(blob, view);
+  const rows = rowStatuses(blob, view, verified);
   const collectedCents = rows.reduce((a, r) => a + zatToCents(r.status?.paidZat ?? 0, blob.rate_usd_per_zec), 0);
   const paid = rows.filter((r) => r.status && PAID.has(r.status.badge)).length;
 
@@ -115,7 +120,7 @@ export function ParticipantList({
                 <PayPanel
                   address={p.address}
                   zat={status.remainingZat}
-                  message={`${blob.title} — ${p.name}'s share`}
+                  message={PAY_MESSAGE}
                   mode={phone ? 'phone' : 'desktop'}
                   onPayClicked={onPay}
                 />

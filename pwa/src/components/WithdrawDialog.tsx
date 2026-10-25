@@ -85,6 +85,7 @@ export function WithdrawDialog({
   const [stage, setStage] = useState<Stage>({ kind: 'confirm' });
   const zat = prepared.inspected.outputs.reduce((a, o) => a + o.zat, 0);
   const zec = zatToZecString(zat);
+  const stillConfirmingZat = (prepared.serverSummary.remaining_zat ?? 0) + (prepared.serverSummary.pending_mempool_zat ?? 0);
   const fee = zatToZecString(prepared.inspected.feeZat);
   // The screen shows where the PCZT really sends the money, never the address the admin asked for.
   const outputs = prepared.inspected.outputs;
@@ -149,6 +150,9 @@ export function WithdrawDialog({
             </p>
           ))}
         </details>
+        {stillConfirmingZat > 0 && (
+          <p className="text-sm text-muted">{zatToZecString(stillConfirmingZat)} ZEC stays on the tab (still confirming, or too small to be worth its fee).</p>
+        )}
         <p className="text-sm text-muted">Server says: {zatToZecString(prepared.serverSummary.output_zat)} ZEC</p>
         {!prepared.ok && (
           <p role="alert" className="font-medium text-danger">

@@ -136,27 +136,51 @@ export class LifecycleService implements OnModuleInit {
 
   /**
    * Delete tabs nobody has opened for 30 days, in any state (`closedAt` is
-   * informational only). Children go via ON DELETE
-   * CASCADE, so each delete is a single atomic statement.
+   * informational only). The watcher is told to stop watching each tab first,
+   * so no orphan keeps scanning for a deleted tab; a tab whose watcher
+   * cannot be reached (anything but 404) is kept for the next run. Children
+   * go via ON DELETE CASCADE, so each delete is a single atomic statement.
    */
   async purgeInactive(now: Date, batchSize = BATCH_SIZE): Promise<number> {
     const cutoff = new Date(now.getTime() - PURGE_AFTER_MS);
     let purged = 0;
+    let skipped = 0;
+    let cursor: string | undefined;
     for (;;) {
       const batch = await this.prisma.tab.findMany({
-        where: { lastAccessAt: { lt: cutoff } },
+        where: {
+          lastAccessAt: { lt: cutoff },
+          ...(cursor ? { id: { gt: cursor } } : {}),
+        },
         select: { id: true },
         orderBy: { id: 'asc' },
         take: batchSize,
       });
       if (batch.length === 0) break;
-      const { count } = await this.prisma.tab.deleteMany({
-        where: { id: { in: batch.map((t) => t.id) }, lastAccessAt: { lt: cutoff } },
-      });
-      purged += count;
+      cursor = batch[batch.length - 1].id;
+      const paused: string[] = [];
+      for (const { id } of batch) {
+        try {
+          await this.watcher.setActive(id, false);
+        } catch (err) {
+          // 404: the watcher lost the tab, nothing to pause there.
+          if (!(err instanceof ApiError && err.status === 404)) {
+            skipped++;
+            this.logger.warn(`purge skipped a tab: ${errorLabel(err)}`);
+            continue;
+          }
+        }
+        paused.push(id);
+      }
+      if (paused.length > 0) {
+        const { count } = await this.prisma.tab.deleteMany({
+          where: { id: { in: paused }, lastAccessAt: { lt: cutoff } },
+        });
+        purged += count;
+      }
       if (batch.length < batchSize) break;
     }
-    this.logger.log(`purged ${purged}`);
+    this.logger.log(`purged ${purged}, kept ${skipped} (watcher unreachable)`);
     return purged;
   }
 }

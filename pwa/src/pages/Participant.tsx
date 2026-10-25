@@ -5,6 +5,7 @@ import { PayPanel } from '../components/PayPanel.tsx';
 import { StaleBanner } from '../components/StaleBanner.tsx';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { centsToUsdString, zatToCents } from '../domain/money.ts';
+import { PAY_MESSAGE } from '../domain/zip321.ts';
 import { computeStatus, type StatusResult } from '../domain/status.ts';
 import { usePayBoost } from '../hooks/usePayBoost.ts';
 import { useTab } from '../hooks/useTab.ts';
@@ -25,7 +26,7 @@ function sentence(r: StatusResult, b: ParticipantBlob): string | null {
 
 export function Participant({ session }: { session: Session }) {
   const [intervalMs, boost] = usePayBoost();
-  const { view, blob, error, stale } = useTab(session, intervalMs);
+  const { view, blob, verified, error, stale } = useTab(session, intervalMs);
   const [phone] = useState(isTouchPhone);
 
   if (error?.status === 404) return <ErrorScreen title="This tab does not exist or the link is wrong." />;
@@ -40,7 +41,20 @@ export function Participant({ session }: { session: Session }) {
   const footer =
     b.mode === 'group'
       ? 'Payments are shielded. Everyone with the group link sees this status.'
-      : 'Payments are shielded. Only you and the organizer see this page.';
+      : "Payments are shielded. Only this link and the organizer's link open this page.";
+
+  if (!verified) {
+    // The blob does not match the link: show none of its (possibly forged) content.
+    return (
+      <main className="mx-auto flex max-w-md flex-col gap-5 p-6 font-sans">
+        {(stale || view.stale) && <StaleBanner />}
+        <div role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-danger">
+          <p className="font-bold">Address mismatch, do not pay</p>
+        </div>
+        <PoweredByZcash />
+      </main>
+    );
+  }
 
   let body;
   if (!row) {
@@ -64,7 +78,7 @@ export function Participant({ session }: { session: Session }) {
           <PayPanel
             address={b.address}
             zat={r.remainingZat}
-            message={`${b.title} — ${b.name}'s share`}
+            message={PAY_MESSAGE}
             mode={phone ? 'phone' : 'desktop'}
             onPayClicked={boost}
           />

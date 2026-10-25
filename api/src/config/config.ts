@@ -10,6 +10,7 @@ export interface Config {
   corsOrigin: string;
   port: number;
   rateLimitCreatePerHour: number;
+  rateLimitCreateGlobalPerHour: number;
   rateLimitDefaultPerMinute: number;
   rateUrl: string;
 }
@@ -22,6 +23,7 @@ const schema = z.object({
   CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   RATE_LIMIT_CREATE_PER_HOUR: z.coerce.number().int().min(1).default(10),
+  RATE_LIMIT_CREATE_GLOBAL_PER_HOUR: z.coerce.number().int().min(1).default(500),
   RATE_LIMIT_DEFAULT_PER_MINUTE: z.coerce.number().int().min(1).default(120),
   RATE_URL: z
     .string()
@@ -47,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     corsOrigin: v.CORS_ORIGIN,
     port: v.PORT,
     rateLimitCreatePerHour: v.RATE_LIMIT_CREATE_PER_HOUR,
+    rateLimitCreateGlobalPerHour: v.RATE_LIMIT_CREATE_GLOBAL_PER_HOUR,
     rateLimitDefaultPerMinute: v.RATE_LIMIT_DEFAULT_PER_MINUTE,
     rateUrl: v.RATE_URL,
   };

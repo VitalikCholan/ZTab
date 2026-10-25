@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TabView } from '../../src/api/types.ts';
 import type { GroupBlob } from '../../src/tab/blobs.ts';
@@ -6,7 +7,7 @@ import type { GroupBlob } from '../../src/tab/blobs.ts';
 vi.mock('../../src/platform.ts', () => ({ isTouchPhone: () => true }));
 vi.mock('qrcode', () => ({ default: { toCanvas: vi.fn(async () => undefined) } }));
 
-import { ParticipantList } from '../../src/components/ParticipantList.tsx';
+import { ParticipantList, rowStatuses } from '../../src/components/ParticipantList.tsx';
 
 const SHARE_ZAT = 31250000; // $12.50 at $40/ZEC
 const NAMES = ['Alice', 'Bob', 'Carol', 'Dave'];
@@ -28,6 +29,19 @@ function setup(paid: number[], b: GroupBlob = blob) {
 }
 
 afterEach(cleanup);
+
+describe('rowStatuses', () => {
+  it('rowStatuses marks every row mismatch when unverified', () => {
+    const view = {
+      state: 'open', stale: false, role: 'group',
+      participants: [0, 1, 2, 3].map((index) => ({ index, address: addr(index), payments: [], status_facts: facts })),
+    } as unknown as TabView;
+    const rows = rowStatuses(blob, view, false);
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => r.status === null && r.mismatch)).toBe(true);
+    expect(rowStatuses(blob, view).some((r) => r.mismatch)).toBe(false);
+  });
+});
 
 describe('ParticipantList progress bar', () => {
   it('reports collected of total', () => {
@@ -67,5 +81,16 @@ describe('ParticipantList progress bar', () => {
     expect(bar).toHaveAttribute('aria-valuemax', '0');
     expect(bar).toHaveAttribute('aria-valuenow', '0');
     expect(bar.firstElementChild?.classList.contains('w-[0%]')).toBe(true);
+  });
+});
+
+describe('ParticipantList pay link', () => {
+  it('pay link message is neutral', async () => {
+    setup([0, 0, 0, 0]);
+    await userEvent.click(screen.getByRole('button', { name: 'Pay for Bob' }));
+    const href = screen.getByRole('link', { name: 'Pay with your wallet' }).getAttribute('href')!;
+    expect(href).toContain('message=ZTab%20share');
+    expect(href).not.toContain('Dinner');
+    expect(href).not.toContain('Bob');
   });
 });

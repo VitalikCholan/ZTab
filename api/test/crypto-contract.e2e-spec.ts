@@ -47,6 +47,7 @@ describe('@ztab/crypto contract', () => {
       .overrideProvider(LIMITS_OPTIONS)
       .useValue({
         create: { limit: 10_000, ttlMs: 60_000 },
+        createGlobal: { limit: 10_000, ttlMs: 60_000 },
         default: { limit: 10_000, ttlMs: 60_000 },
       })
       .compile();

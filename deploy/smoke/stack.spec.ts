@@ -21,6 +21,7 @@ const PAGE_HEADERS = {
   'referrer-policy': 'no-referrer',
   'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
   'x-content-type-options': 'nosniff',
+  'cross-origin-opener-policy': 'same-origin',
 };
 
 function docker(args: string[]): string {
@@ -124,6 +125,7 @@ test('api is proxied', async ({ request }) => {
   // Caddy adds only nosniff (and HSTS on real domains) to /api; the API's own copies must not double up.
   expect(values(health, 'x-content-type-options')).toEqual(['nosniff']);
   expect(values(health, 'strict-transport-security')).toEqual([]);
+  expect(values(health, 'cache-control')).toEqual(['no-store']);
 
   const status = await request.get(`${BASE}/api/status`);
   expect(status.status()).toBe(200);

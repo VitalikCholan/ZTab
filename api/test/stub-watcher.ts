@@ -296,6 +296,7 @@ export class StubWatcher {
               expiry_height: 220,
               txid: 'aa'.repeat(32),
               pending_mempool_zat: 0,
+              remaining_zat: 0,
             },
           },
         );

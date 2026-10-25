@@ -9,19 +9,31 @@ import { PoweredByZcash } from '../components/PoweredByZcash.tsx';
 
 export function Group({ session }: { session: Session }) {
   const [intervalMs, boost] = usePayBoost();
-  const { view, blob, error, stale } = useTab(session, intervalMs);
+  const { view, blob, verified, error, stale } = useTab(session, intervalMs);
 
   if (error?.status === 404) return <ErrorScreen title="This tab does not exist or the link is wrong." />;
   if (error?.status === 429) return <ErrorScreen title="Too many requests from your network, wait a minute." />;
   if (error) return <ErrorScreen title="Something went wrong">{error.message}</ErrorScreen>;
   if (!view || !blob) return <p className="p-6 text-muted">Loading…</p>;
+  if (!verified) {
+    // The blob does not match the link: show none of its (possibly forged) content.
+    return (
+      <main className="mx-auto flex max-w-md flex-col gap-5 px-4 py-6 font-sans">
+        {(stale || view.stale) && <StaleBanner />}
+        <div role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-danger">
+          <p className="font-bold">Address mismatch, do not pay</p>
+        </div>
+        <PoweredByZcash />
+      </main>
+    );
+  }
   const b = blob as GroupBlob;
 
   return (
     <main className="mx-auto flex max-w-md flex-col gap-5 px-4 py-6 font-sans">
       {(stale || view.stale) && <StaleBanner />}
       <h1 className="text-2xl font-bold text-fg">{b.title}</h1>
-      <ParticipantList blob={b} view={view} onPay={boost} />
+      <ParticipantList blob={b} view={view} onPay={boost} verified={verified} />
       <p className="text-sm text-muted">Payments are shielded. Everyone with the group link sees this status.</p>
       <PoweredByZcash />
     </main>

@@ -11,6 +11,12 @@ export interface LimitRule {
 export interface LimitsOptions {
   /** PUT /tabs/{id}: tab creation. */
   create: LimitRule;
+  /**
+   * PUT /tabs/{id} across all clients: a cap on total creations that spoofed or
+   * rotating IPs cannot dodge. In-memory and per process (one API process runs
+   * in production); a fixed window of one hour that resets at its end.
+   */
+  createGlobal: LimitRule;
   /** Every other route except /healthz. */
   default: LimitRule;
 }
@@ -18,16 +24,19 @@ export interface LimitsOptions {
 /** Spec §8: 10 creations per hour, 120 other requests per minute, per IP. */
 export const DEFAULT_LIMITS: LimitsOptions = {
   create: { limit: 10, ttlMs: 3_600_000 },
+  createGlobal: { limit: 500, ttlMs: 3_600_000 },
   default: { limit: 120, ttlMs: 60_000 },
 };
 
 /** Limits from the environment (RATE_LIMIT_*); defaults equal DEFAULT_LIMITS. */
 export function limitsFromConfig(config: {
   rateLimitCreatePerHour: number;
+  rateLimitCreateGlobalPerHour: number;
   rateLimitDefaultPerMinute: number;
 }): LimitsOptions {
   return {
     create: { limit: config.rateLimitCreatePerHour, ttlMs: 3_600_000 },
+    createGlobal: { limit: config.rateLimitCreateGlobalPerHour, ttlMs: 3_600_000 },
     default: { limit: config.rateLimitDefaultPerMinute, ttlMs: 60_000 },
   };
 }
@@ -47,6 +56,8 @@ export function usesCreateBudget(handler: Function): boolean {
 
 /** One counter per named budget and client, shared by every route. */
 export function budgetKey(_ctx: ExecutionContext, tracker: string, name: string): string {
+  // The global budget has one counter for every client.
+  if (name === 'createGlobal') return name;
   return `${name}:${tracker}`;
 }
 

@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import { ApiClient, ApiRequestError } from '../api/client.ts';
 import type { TabView } from '../api/types.ts';
 import { config } from '../config.ts';
+import { blobCommit, COMMIT_BYTES } from '@ztab/crypto';
 import { adminBlobV1, BlobError, groupBlobV1, openTyped, participantBlobV1 } from '../tab/blobs.ts';
 import type { Session } from '../tab/keys.ts';
 import { usePolling } from './usePolling.ts';
@@ -18,6 +19,11 @@ export interface TabState {
   /** The role's decrypted blob; narrow it with the matching `*BlobV1` type. */
   blob: unknown | null;
   /**
+   * Admin: always true. Group/participant: the blob hashes to the commitment in the link. False
+   * (or no commitment) means a server re-sealed the blob: show the mismatch, never offer to pay.
+   */
+  verified: boolean;
+  /**
    * A failure the page must show: 404, 429 and other 4xx as `ApiRequestError`; a blob that
    * will not open as a synthetic `ApiRequestError(0, 'invalid_blob', …)`. Network failures and
    * 5xx are not errors: they keep the last view and set `stale`.
@@ -27,13 +33,21 @@ export interface TabState {
   refresh(): void;
 }
 
+/** Constant-time full-length comparison; a missing or wrong-length commitment never verifies. */
+function commitMatches(want: Uint8Array | undefined, got: Uint8Array): boolean {
+  if (!want || want.length !== COMMIT_BYTES || got.length !== COMMIT_BYTES) return false;
+  let diff = 0;
+  for (let i = 0; i < COMMIT_BYTES; i++) diff |= want[i]! ^ got[i]!;
+  return diff === 0;
+}
+
 const RATE_LIMIT_BACKOFF_MS = 60_000;
 
 const client = new ApiClient(config.apiUrl);
 
 export function useTab(session: Session, intervalMs: number): TabState {
-  const [state, setState] = useState<Omit<TabState, 'refresh'>>({ view: null, blob: null, error: null, stale: false });
-  const opened = useRef<{ b64: string; blob: unknown } | null>(null);
+  const [state, setState] = useState<Omit<TabState, 'refresh'>>({ view: null, blob: null, verified: false, error: null, stale: false });
+  const opened = useRef<{ b64: string; blob: unknown; verified: boolean } | null>(null);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -47,10 +61,12 @@ export function useTab(session: Session, intervalMs: number): TabState {
     try {
       const view = await client.getTab(session.tabId, session.token);
       if (opened.current?.b64 !== view.blob) {
-        opened.current = { b64: view.blob, blob: await openTyped(session.blobKey, view.blob, SCHEMAS[session.role]) };
+        const blob = await openTyped(session.blobKey, view.blob, SCHEMAS[session.role]);
+        const verified = session.role === 'admin' || commitMatches(session.commit, await blobCommit(blob));
+        opened.current = { b64: view.blob, blob, verified };
       }
-      const blob = opened.current.blob;
-      if (alive.current) setState({ view, blob, error: null, stale: view.stale });
+      const { blob, verified } = opened.current;
+      if (alive.current) setState({ view, blob, verified, error: null, stale: view.stale });
     } catch (e) {
       if (!alive.current) return;
       if (e instanceof BlobError) {

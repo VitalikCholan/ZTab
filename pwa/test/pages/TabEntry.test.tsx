@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { importBlobKey, sealBlob, toBase64Url } from '@ztab/crypto';
+import { blobCommit, encodeFragment, importBlobKey, sealBlob, toBase64Url } from '@ztab/crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hex, hkdfFixture, json } from '../helpers/fixtures.ts';
 import { toBase64 } from '../../src/tab/blobs.ts';
@@ -21,6 +21,7 @@ const BLOB = {
 };
 
 let blobB64: string;
+let P_HASH: string;
 let secure: PropertyDescriptor | undefined;
 
 function view() {
@@ -40,9 +41,10 @@ beforeEach(async () => {
   vi.resetModules();
   wasm.state = 'ready';
   document.title = 'ZTab';
+  P_HASH = encodeFragment({ kind: 'participant', index: 1, key: keyBytes, commit: await blobCommit(BLOB) });
   blobB64 = toBase64(await sealBlob(await importBlobKey(keyBytes), BLOB));
   vi.stubGlobal('fetch', vi.fn(async () => json(200, view())));
-  window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+  window.history.replaceState(null, '', `${PATH}${P_HASH}`);
   secure = Object.getOwnPropertyDescriptor(window, 'isSecureContext');
   Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
 });
@@ -82,6 +84,22 @@ describe('TabEntry', () => {
     expect(await screen.findByText('This link is incomplete')).toBeInTheDocument();
   });
 
+  it('old-format link without commitment shows the incomplete-link screen', async () => {
+    window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+    await mount();
+    expect(await screen.findByText('This link is incomplete')).toBeInTheDocument();
+    expect(window.location.hash).toBe('');
+  });
+
+  it('a blob that does not match the link commitment shows the mismatch and no Pay', async () => {
+    const forged = { ...BLOB, address: 'utest1evil' };
+    blobB64 = toBase64(await sealBlob(await importBlobKey(keyBytes), forged));
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, { ...view(), participants: [{ index: 1, address: 'utest1evil', payments: [], status_facts: null }] })));
+    await mount();
+    expect(await screen.findByText('Address mismatch, do not pay')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Pay with your wallet' })).toBeNull();
+  });
+
   it('a #x= fragment renders Incomplete and is removed', async () => {
     window.history.replaceState(null, '', `${PATH}#x=abc`);
     await mount();
@@ -112,7 +130,7 @@ describe('TabEntry', () => {
     expect(await screen.findByText('This tab does not exist or the link is wrong.')).toBeInTheDocument();
     r.unmount();
     vi.stubGlobal('fetch', vi.fn(async () => json(429, { error: { code: 'rate_limited', message: 'x' } })));
-    window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+    window.history.replaceState(null, '', `${PATH}${P_HASH}`);
     vi.resetModules();
     await mount();
     expect(await screen.findByText('Too many requests from your network, wait a minute.')).toBeInTheDocument();
@@ -173,7 +191,7 @@ describe('TabEntry', () => {
         r.unmount();
 
         vi.resetModules();
-        window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+        window.history.replaceState(null, '', `${PATH}${P_HASH}`);
         const f429 = vi.fn(async () => e429());
         vi.stubGlobal('fetch', f429);
         await mount();
@@ -209,7 +227,7 @@ describe('a link pasted into the open tab (same-document fragment navigation)', 
   it('the new hash wins over the stored session, which is zeroed', async () => {
     const { sessionStore, admin } = await mountAdmin();
     const adminToken = admin.token;
-    paste(`#p=1.${toBase64Url(keyBytes)}`);
+    paste(P_HASH);
     expect(await screen.findByText('Hi, Bob')).toBeInTheDocument();
     expect(window.location.hash).toBe('');
     expect(sessionStore.get(tabId)?.role).toBe('participant');
@@ -234,7 +252,7 @@ describe('useTab refresh', () => {
     vi.stubGlobal('fetch', f);
     const { useTab } = await import('../../src/hooks/useTab.ts');
     const { sessionFromFragment } = await import('../../src/tab/keys.ts');
-    const session = await sessionFromFragment(tabId, `p=1.${toBase64Url(keyBytes)}`, window.location.origin);
+    const session = await sessionFromFragment(tabId, P_HASH, window.location.origin);
     const { renderHook, act } = await import('@testing-library/react');
     const { result } = renderHook(() => useTab(session, 10000));
     await waitFor(() => expect(result.current.error?.status).toBe(404));
