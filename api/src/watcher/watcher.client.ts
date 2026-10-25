@@ -20,11 +20,17 @@ export interface WatcherClientOptions {
   now?: () => number;
   /** Per-request timeout; defaults to 5 s (spec). */
   timeoutMs?: number;
+  /**
+   * Timeout for sweep, which builds and proves the PCZT: ~9 s on a 1 vCPU VPS, so the
+   * 5 s default would fail every withdraw. Defaults to 60 s.
+   */
+  slowTimeoutMs?: number;
   /** Cache lifetime of GET /v1/tabs/{id}; defaults to 5 s (spec). */
   cacheTtlMs?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_SLOW_TIMEOUT_MS = 60_000;
 const DEFAULT_CACHE_TTL_MS = 5000;
 const MAX_CACHE_ENTRIES = 10_000;
 
@@ -40,6 +46,7 @@ export class WatcherClient {
   private readonly logger = new Logger(WatcherClient.name);
   private readonly now: () => number;
   private readonly timeoutMs: number;
+  private readonly slowTimeoutMs: number;
   private readonly cacheTtlMs: number;
   private readonly cache = new Map<string, { at: number; tab: WatcherTab }>();
   /** Bumped on invalidation so an in-flight getTab cannot cache stale data. */
@@ -51,6 +58,7 @@ export class WatcherClient {
   ) {
     this.now = options?.now ?? Date.now;
     this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.slowTimeoutMs = options?.slowTimeoutMs ?? DEFAULT_SLOW_TIMEOUT_MS;
     this.cacheTtlMs = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   }
 
@@ -117,6 +125,7 @@ export class WatcherClient {
         'POST',
         `/v1/tabs/${encodeURIComponent(id)}/sweep`,
         body,
+        { timeoutMs: this.slowTimeoutMs },
       );
     } finally {
       this.invalidate(id);
@@ -156,7 +165,7 @@ export class WatcherClient {
     method: string,
     path: string,
     body?: unknown,
-    opts: { conflictAsConflict?: boolean; noContent?: boolean } = {},
+    opts: { conflictAsConflict?: boolean; noContent?: boolean; timeoutMs?: number } = {},
   ): Promise<T> {
     const base = this.config.watcherUrl.replace(/\/+$/, '');
     let res: Response;
@@ -169,7 +178,7 @@ export class WatcherClient {
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         redirect: 'error',
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs),
       });
     } catch (err) {
       const reason =

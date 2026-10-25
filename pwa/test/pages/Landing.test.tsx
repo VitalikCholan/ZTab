@@ -14,15 +14,12 @@ function mount() {
 }
 
 describe('Landing', () => {
-  it('shows a synced testnet badge and the links', async () => {
+  it('shows a synced testnet badge and only the create link', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(200, { network: 'test', watcher: 'ok' })));
     mount();
     expect(await screen.findByText('Testnet · synced')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Create a tab' })).toHaveAttribute('href', '/new');
-    const gh = screen.getByRole('link', { name: 'GitHub' });
-    expect(gh).toHaveAttribute('href', 'https://github.com/VitalikCholan/ZTab');
-    expect(gh).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(gh).toHaveAttribute('target', '_blank');
+    expect(screen.getAllByRole('link')).toHaveLength(1);
   });
 
   it('shows syncing when the watcher is not ok', async () => {
