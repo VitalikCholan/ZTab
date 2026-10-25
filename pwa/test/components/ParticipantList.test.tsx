@@ -6,7 +6,7 @@ import type { GroupBlob } from '../../src/tab/blobs.ts';
 vi.mock('../../src/platform.ts', () => ({ isTouchPhone: () => true }));
 vi.mock('qrcode', () => ({ default: { toCanvas: vi.fn(async () => undefined) } }));
 
-import { ParticipantList } from '../../src/components/ParticipantList.tsx';
+import { ParticipantList, rowStatuses } from '../../src/components/ParticipantList.tsx';
 
 const SHARE_ZAT = 31250000; // $12.50 at $40/ZEC
 const NAMES = ['Alice', 'Bob', 'Carol', 'Dave'];
@@ -28,6 +28,19 @@ function setup(paid: number[], b: GroupBlob = blob) {
 }
 
 afterEach(cleanup);
+
+describe('rowStatuses', () => {
+  it('rowStatuses marks every row mismatch when unverified', () => {
+    const view = {
+      state: 'open', stale: false, role: 'group',
+      participants: [0, 1, 2, 3].map((index) => ({ index, address: addr(index), payments: [], status_facts: facts })),
+    } as unknown as TabView;
+    const rows = rowStatuses(blob, view, false);
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => r.status === null && r.mismatch)).toBe(true);
+    expect(rowStatuses(blob, view).some((r) => r.mismatch)).toBe(false);
+  });
+});
 
 describe('ParticipantList progress bar', () => {
   it('reports collected of total', () => {

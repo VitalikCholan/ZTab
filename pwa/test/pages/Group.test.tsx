@@ -30,7 +30,7 @@ function setup(paid: number[] = [SHARE_ZAT, SHARE_ZAT, SHARE_ZAT, 0]) {
     balance: { spendable_zat: 3 * SHARE_ZAT, pending_zat: 0, swept_zat: 0, min_unspent_confirmations: 12 },
     participants: paid.map((z, index) => ({ index, address: addr(index), payments: z ? [pay(z)] : [], status_facts: facts })),
   } as unknown as TabView;
-  useTab.mockReturnValue({ view, blob, error: null, stale: false, refresh: vi.fn() });
+  useTab.mockReturnValue({ view, blob, verified: true, error: null, stale: false, refresh: vi.fn() });
   return render(<Group session={session} />);
 }
 
@@ -86,13 +86,26 @@ describe('Group', () => {
         { index: 2, address: addr(2), payments: [], status_facts: facts },
       ],
     } as unknown as TabView;
-    useTab.mockReturnValue({ view, blob, error: null, stale: false, refresh: vi.fn() });
+    useTab.mockReturnValue({ view, blob, verified: true, error: null, stale: false, refresh: vi.fn() });
     render(<Group session={session} />);
     expect(screen.getAllByText('Status unknown')).toHaveLength(2); // Alice (null facts), Dave (no row)
     expect(screen.getByText('Address mismatch, do not pay')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Pay for Bob' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Pay for Carol' })).toBeInTheDocument();
     expect(screen.getByText('$0.00 of $50.00 collected · 0 of 4 paid')).toBeInTheDocument();
+  });
+
+  it('group page with wrong commitment shows mismatch and no Pay', () => {
+    const forged = { ...blob, participants: blob.participants.map((p) => ({ ...p, address: `utest1evil${p.index}` })) };
+    const view = {
+      state: 'open', stale: false, role: 'group',
+      participants: forged.participants.map((p) => ({ index: p.index, address: p.address, payments: [], status_facts: facts })),
+    } as unknown as TabView;
+    useTab.mockReturnValue({ view, blob: forged, verified: false, error: null, stale: false, refresh: vi.fn() });
+    render(<Group session={session} />);
+    expect(screen.getAllByText('Address mismatch, do not pay')).toHaveLength(4);
+    expect(screen.queryByRole('button', { name: /^Pay/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Pay with your wallet' })).toBeNull();
   });
 
   it('never says close', () => {

@@ -25,7 +25,7 @@ function sentence(r: StatusResult, b: ParticipantBlob): string | null {
 
 export function Participant({ session }: { session: Session }) {
   const [intervalMs, boost] = usePayBoost();
-  const { view, blob, error, stale } = useTab(session, intervalMs);
+  const { view, blob, verified, error, stale } = useTab(session, intervalMs);
   const [phone] = useState(isTouchPhone);
 
   if (error?.status === 404) return <ErrorScreen title="This tab does not exist or the link is wrong." />;
@@ -43,7 +43,13 @@ export function Participant({ session }: { session: Session }) {
       : 'Payments are shielded. Only you and the organizer see this page.';
 
   let body;
-  if (!row) {
+  if (!verified) {
+    body = (
+      <div role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-danger">
+        <p className="font-bold">Address mismatch, do not pay</p>
+      </div>
+    );
+  } else if (!row) {
     body = <StatusBadge badge="unknown" />;
   } else if (b.address !== row.address) {
     body = (

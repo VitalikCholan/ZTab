@@ -26,12 +26,12 @@ const pay = (zat: number, confirmations = 5) => ({
 });
 const facts = (transparent = false) => ({ confirmed_zat: 0, mempool_zat: 0, best_confirmations: 0, transparent_source: transparent });
 
-function setup(opts: { payments?: ReturnType<typeof pay>[]; facts?: ReturnType<typeof facts> | null; stale?: boolean; blob?: Record<string, unknown>; address?: string } = {}) {
+function setup(opts: { payments?: ReturnType<typeof pay>[]; facts?: ReturnType<typeof facts> | null; stale?: boolean; blob?: Record<string, unknown>; address?: string; verified?: boolean } = {}) {
   const view = {
     participant_index: 0, stale: opts.stale ?? false,
     participants: [{ index: 0, address: opts.address ?? ADDR, payments: opts.payments ?? [], status_facts: opts.facts === undefined ? facts() : opts.facts }],
   } as unknown as TabView;
-  useTab.mockReturnValue({ view, blob: blob(opts.blob), error: null, stale: opts.stale ?? false, refresh: vi.fn() });
+  useTab.mockReturnValue({ view, blob: blob(opts.blob), verified: opts.verified ?? true, error: null, stale: opts.stale ?? false, refresh: vi.fn() });
   return render(<Participant session={session} />);
 }
 
@@ -104,6 +104,14 @@ describe('Participant', () => {
     setup({ address: 'utest1other' });
     expect(screen.getByText('Address mismatch, do not pay')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Pay with your wallet' })).toBeNull();
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  it('participant page with wrong commitment shows mismatch and no Pay', () => {
+    setup({ verified: false, address: 'utest1evil', blob: { address: 'utest1evil' } });
+    expect(screen.getByText('Address mismatch, do not pay')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Pay with your wallet' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /copy/i })).toBeNull();
     expect(screen.queryByRole('img')).toBeNull();
   });
 

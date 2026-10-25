@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { encodeFragment, importBlobKey, sealBlob, toBase64Url } from '@ztab/crypto';
+import { blobCommit, encodeFragment, importBlobKey, sealBlob, toBase64Url } from '@ztab/crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hex, hkdfFixture, json } from '../helpers/fixtures.ts';
 import { toBase64 } from '../../src/tab/blobs.ts';
@@ -14,7 +14,6 @@ vi.mock('../../src/wasm.ts', () => ({
 
 const { tabId } = hkdfFixture;
 const keyBytes = hex(hkdfFixture.participantKeyHex['1']);
-const P_HASH = encodeFragment({ kind: 'participant', index: 1, key: keyBytes, commit: new Uint8Array(16).fill(7) });
 const PATH = `/t/${tabId}`;
 const BLOB = {
   v: 1, title: 'Dinner', index: 1, name: 'Bob', share_cents: 2500, share_zat: 62111801,
@@ -22,6 +21,7 @@ const BLOB = {
 };
 
 let blobB64: string;
+let P_HASH: string;
 let secure: PropertyDescriptor | undefined;
 
 function view() {
@@ -41,6 +41,7 @@ beforeEach(async () => {
   vi.resetModules();
   wasm.state = 'ready';
   document.title = 'ZTab';
+  P_HASH = encodeFragment({ kind: 'participant', index: 1, key: keyBytes, commit: await blobCommit(BLOB) });
   blobB64 = toBase64(await sealBlob(await importBlobKey(keyBytes), BLOB));
   vi.stubGlobal('fetch', vi.fn(async () => json(200, view())));
   window.history.replaceState(null, '', `${PATH}${P_HASH}`);
@@ -81,6 +82,22 @@ describe('TabEntry', () => {
     vi.resetModules();
     await mount();
     expect(await screen.findByText('This link is incomplete')).toBeInTheDocument();
+  });
+
+  it('old-format link without commitment shows the incomplete-link screen', async () => {
+    window.history.replaceState(null, '', `${PATH}#p=1.${toBase64Url(keyBytes)}`);
+    await mount();
+    expect(await screen.findByText('This link is incomplete')).toBeInTheDocument();
+    expect(window.location.hash).toBe('');
+  });
+
+  it('a blob that does not match the link commitment shows the mismatch and no Pay', async () => {
+    const forged = { ...BLOB, address: 'utest1evil' };
+    blobB64 = toBase64(await sealBlob(await importBlobKey(keyBytes), forged));
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, { ...view(), participants: [{ index: 1, address: 'utest1evil', payments: [], status_facts: null }] })));
+    await mount();
+    expect(await screen.findByText('Address mismatch, do not pay')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Pay with your wallet' })).toBeNull();
   });
 
   it('a #x= fragment renders Incomplete and is removed', async () => {

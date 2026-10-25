@@ -122,8 +122,8 @@ test.describe('privacy', { tag: '@desktop' }, () => {
 
       const fragments = [adminUrl, ...links].map((u) => new URL(u).hash);
       expect(fragments.every((f) => /^#[agp]=/.test(f))).toBe(true);
-      // The 43-char base64url key of each fragment.
-      const keys = fragments.map((f) => /([A-Za-z0-9_-]{43})$/.exec(f)?.[1]);
+      // The 43-char base64url key of each fragment (g/p fragments end with `.<22-char commitment>`).
+      const keys = fragments.map((f) => /([A-Za-z0-9_-]{43})(?:\.[A-Za-z0-9_-]{22})?$/.exec(f)?.[1]);
       expect(keys.every((k) => k !== undefined)).toBe(true);
 
       for (const r of http) {
