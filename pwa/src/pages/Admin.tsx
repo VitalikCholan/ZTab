@@ -15,6 +15,7 @@ import { useTab } from '../hooks/useTab.ts';
 import type { AdminBlob } from '../tab/blobs.ts';
 import { adminLinks, type Session } from '../tab/keys.ts';
 import { prepareWithdraw, signAndBroadcast, type PreparedWithdraw } from '../tab/withdraw.ts';
+import { PoweredByZcash } from '../components/PoweredByZcash.tsx';
 
 const FALLBACK_BLOCK_SECONDS = 75;
 
@@ -147,6 +148,7 @@ export function Admin({ session }: { session: Session }) {
         }
       />
       <p className="text-sm text-neutral-600">{footer}</p>
+      <PoweredByZcash />
       <section className="flex flex-col gap-2 border-t border-neutral-300 pt-4">
         <h2 className="text-sm font-medium">Admin link</h2>
         <p className="text-sm font-medium text-red-700">Save this link now. It is the only key to the money. We cannot recover it.</p>

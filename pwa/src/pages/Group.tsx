@@ -5,6 +5,7 @@ import { usePayBoost } from '../hooks/usePayBoost.ts';
 import { useTab } from '../hooks/useTab.ts';
 import type { GroupBlob } from '../tab/blobs.ts';
 import type { Session } from '../tab/keys.ts';
+import { PoweredByZcash } from '../components/PoweredByZcash.tsx';
 
 export function Group({ session }: { session: Session }) {
   const [intervalMs, boost] = usePayBoost();
@@ -22,6 +23,7 @@ export function Group({ session }: { session: Session }) {
       <h1 className="text-2xl font-bold">{b.title}</h1>
       <ParticipantList blob={b} view={view} onPay={boost} />
       <p className="text-sm text-neutral-600">Payments are shielded. Everyone with the group link sees this status.</p>
+      <PoweredByZcash />
     </main>
   );
 }

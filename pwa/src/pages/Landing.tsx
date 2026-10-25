@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ApiClient } from '../api/client.ts';
 import { config } from '../config.ts';
+import { PoweredByZcash } from '../components/PoweredByZcash.tsx';
 
 const client = new ApiClient(config.apiUrl);
 
@@ -42,6 +43,7 @@ export function Landing() {
           </a>
         </p>
       )}
+      <PoweredByZcash />
     </main>
   );
 }

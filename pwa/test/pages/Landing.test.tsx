@@ -25,7 +25,8 @@ describe('Landing', () => {
     expect(faucet).toHaveAttribute('href', 'https://fauzec.com');
     expect(faucet).toHaveAttribute('rel', 'noopener noreferrer');
     expect(faucet).toHaveAttribute('target', '_blank');
-    expect(screen.getAllByRole('link')).toHaveLength(2);
+    expect(screen.getAllByRole('link')).toHaveLength(3);
+    expect(screen.getByRole('link', { name: 'Powered by Zcash' })).toHaveAttribute('href', 'https://z.cash/');
   });
 
   it('has no faucet link on mainnet', async () => {

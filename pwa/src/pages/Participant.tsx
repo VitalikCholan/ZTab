@@ -11,6 +11,7 @@ import { useTab } from '../hooks/useTab.ts';
 import { isTouchPhone } from '../platform.ts';
 import { type ParticipantBlob } from '../tab/blobs.ts';
 import type { Session } from '../tab/keys.ts';
+import { PoweredByZcash } from '../components/PoweredByZcash.tsx';
 
 function sentence(r: StatusResult, b: ParticipantBlob): string | null {
   const fiat = (zat: number) => zatToCents(zat, b.rate_usd_per_zec);
@@ -80,6 +81,7 @@ export function Participant({ session }: { session: Session }) {
       <Amount cents={b.share_cents} zat={b.share_zat} />
       {body}
       <p className="text-sm text-neutral-600">{footer}</p>
+      <PoweredByZcash />
     </main>
   );
 }
