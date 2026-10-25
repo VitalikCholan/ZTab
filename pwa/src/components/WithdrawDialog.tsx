@@ -151,7 +151,7 @@ export function WithdrawDialog({
           ))}
         </details>
         {stillConfirmingZat > 0 && (
-          <p className="text-sm text-muted">{zatToZecString(stillConfirmingZat)} ZEC is still confirming; you can withdraw it later.</p>
+          <p className="text-sm text-muted">{zatToZecString(stillConfirmingZat)} ZEC stays on the tab (still confirming, or too small to be worth its fee).</p>
         )}
         <p className="text-sm text-muted">Server says: {zatToZecString(prepared.serverSummary.output_zat)} ZEC</p>
         {!prepared.ok && (

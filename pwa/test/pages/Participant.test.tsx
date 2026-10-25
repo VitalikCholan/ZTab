@@ -123,6 +123,14 @@ describe('Participant', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 
+  it('unverified page shows only the alert, not the forged content', () => {
+    setup({ verified: false, blob: { title: 'FORGEDTITLE', name: 'Mallory', address: ADDR } });
+    expect(screen.getAllByText('Address mismatch, do not pay')).toHaveLength(1);
+    expect(screen.queryByText('FORGEDTITLE')).toBeNull();
+    expect(screen.queryByText(/Mallory/)).toBeNull();
+    expect(screen.queryByText('$12.50')).toBeNull();
+  });
+
   it('clicking Pay switches polling to 5000', async () => {
     setup();
     expect(useTab).toHaveBeenLastCalledWith(session, 10_000);
@@ -134,7 +142,7 @@ describe('Participant', () => {
 
   it('footer per mode', () => {
     setup();
-    expect(screen.getByText('Payments are shielded. Only you and the organizer see this page.')).toBeInTheDocument();
+    expect(screen.getByText("Payments are shielded. Only this link and the organizer's link open this page.")).toBeInTheDocument();
     cleanup();
     setup({ blob: { mode: 'group' } });
     expect(screen.getByText('Payments are shielded. Everyone with the group link sees this status.')).toBeInTheDocument();

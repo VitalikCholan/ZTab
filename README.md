@@ -18,7 +18,7 @@ You need a Zcash **testnet** wallet with shielded (Orchard) sends and a little t
    - **Individual:** one link per person; each sees only their own share.
 3. Save the **admin link** (it is the only way back to the tab and its funds), then open a participant link.
 4. Pay from your wallet by scanning the QR code or opening the `zcash:` link. The payment shows as seen within seconds of reaching the mempool and as **paid** after 3 confirmations.
-5. Back on the admin page, once a payment has 10 confirmations (a few minutes on testnet), press **Withdraw**, check the summary (it shows where the transaction really sends the money) and confirm. The funds arrive in your wallet as one shielded transaction. Payments that are still confirming stay on the tab; the dialog says how much, and you can withdraw them later.
+5. Back on the admin page, once a payment has 10 confirmations (a few minutes on testnet), press **Withdraw**, check the summary (it shows where the transaction really sends the money) and confirm. The funds arrive in your wallet as one shielded transaction. The rest stays on the tab (the dialog says how much): younger notes and notes past the 50-note cap can be withdrawn later; notes of 5 000 zat or less are never swept by the app (recoverable only with the admin link, outside the app).
 
 ## How it works
 
@@ -48,7 +48,7 @@ flowchart LR
 
 | The server can learn | The server never learns |
 |---|---|
-| That a tab exists, its mode and participant count | Title, names, USD amounts |
+| That a tab exists, its mode and participant count | Title, names, the USD total and shares (it does see the ZEC that arrives) |
 | Incoming shielded payments to the tab's addresses (through the UFVK) and their confirmations | Who paid: payers send from their own shielded wallets |
 | When the tab is withdrawn, and the withdraw address and amount: the browser sends the address to the watcher to build the sweep, and the output is recoverable with the OVK derived from the UFVK | The spend key or the master key |
 | In individual mode, which network client (IP, timing) opens which participant's link, and so which slot's payments it may relate to. Logs do not record IPs, but an active operator could | Access tokens at rest: the database stores only their SHA-256 hashes (a raw token travels in the `Authorization` header of each request) |
@@ -66,7 +66,7 @@ Trade-offs and limits we accept:
 - The server holds each tab's viewing key, so it sees amounts arriving at a tab (but not who sent them or what they are for). That is what lets the app show live payment status without the organizer running a wallet.
 - The demo watcher uses the public lightwalletd `testnet.zec.rocks` and fetches transactions by txid, so that server's operator can see which txids concern tabs. On mainnet the watcher would use its own lightwalletd or Tor.
 - Anyone holding a link sees what it opens; a link shared in a messenger is visible to whoever can read that chat.
-- A tab nobody opens for 30 days is deleted from the API database and paused at the watcher, but the watcher keeps its UFVK and payment facts.
+- A tab nobody opens for 30 days is deleted from the API database and paused at the watcher, but the watcher keeps its UFVK, payment facts and withdraw records (sweep history and the sweep transaction).
 - A compromised server could serve modified JavaScript that leaks the fragment. That is the limit of any web app.
 
 ## Repository
@@ -99,6 +99,6 @@ Each package README has its own run instructions. CI runs all of the above on ev
 
 - Testnet only. Mainnet needs the NU7 crates to be released and a security review.
 - Payers need a wallet that sends shielded ZEC and handles `zcash:` (ZIP-321) requests; wallet support on testnet after NU7 is still uneven.
-- A tab nobody opens for 30 days is deleted from the API database and paused at the watcher (which keeps its UFVK and payment facts). Funds that arrive later stay on the tab key and can be recovered only with the admin link, outside the app.
-- A withdraw takes notes with at least 10 confirmations worth more than 5 000 zat, at most 50 per sweep; the rest stays on the tab and can be withdrawn later.
+- A tab nobody opens for 30 days is deleted from the API database and paused at the watcher (which keeps its UFVK, payment facts and withdraw records). Funds that arrive later stay on the tab key and can be recovered only with the admin link, outside the app.
+- A withdraw takes notes with at least 10 confirmations worth more than 5 000 zat, at most 50 per sweep; the rest stays on the tab: younger notes and notes past the 50-note cap can be withdrawn later; notes of 5 000 zat or less are never swept by the app (recoverable only with the admin link, outside the app).
 - The demo depends on a public lightwalletd (`testnet.zec.rocks`), which sees which txids concern tabs; it can be switched in `deploy/.env` without a code change.

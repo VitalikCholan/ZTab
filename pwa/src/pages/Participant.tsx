@@ -41,16 +41,23 @@ export function Participant({ session }: { session: Session }) {
   const footer =
     b.mode === 'group'
       ? 'Payments are shielded. Everyone with the group link sees this status.'
-      : 'Payments are shielded. Only you and the organizer see this page.';
+      : "Payments are shielded. Only this link and the organizer's link open this page.";
+
+  if (!verified) {
+    // The blob does not match the link: show none of its (possibly forged) content.
+    return (
+      <main className="mx-auto flex max-w-md flex-col gap-5 p-6 font-sans">
+        {(stale || view.stale) && <StaleBanner />}
+        <div role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-danger">
+          <p className="font-bold">Address mismatch, do not pay</p>
+        </div>
+        <PoweredByZcash />
+      </main>
+    );
+  }
 
   let body;
-  if (!verified) {
-    body = (
-      <div role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-danger">
-        <p className="font-bold">Address mismatch, do not pay</p>
-      </div>
-    );
-  } else if (!row) {
+  if (!row) {
     body = <StatusBadge badge="unknown" />;
   } else if (b.address !== row.address) {
     body = (

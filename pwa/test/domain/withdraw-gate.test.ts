@@ -27,7 +27,12 @@ describe('withdrawGate', () => {
   });
   it('gate waits when sweepable is zero but spendable is not', () => {
     expect(withdrawGate(bal(10, 5, 2, 0), 25, 'open')).toEqual({ kind: 'wait', minutes: 4 });
-    expect(withdrawGate(bal(10, 0, 10, 0), 25, 'open')).toEqual({ kind: 'wait', minutes: 1 });
+  });
+  it('dust-only deep notes: nothing, not wait forever', () => {
+    expect(withdrawGate(bal(10, 0, 10, 0), 25, 'open')).toEqual({ kind: 'nothing' });
+  });
+  it('sweepable zero with pending: wait', () => {
+    expect(withdrawGate(bal(10, 5, 10, 0), 25, 'open')).toEqual({ kind: 'wait', minutes: 1 });
   });
   it('nothing when sweepable is zero and nothing is spendable or pending', () => {
     expect(withdrawGate(bal(0, 0, null, 0), 25, 'open')).toEqual({ kind: 'nothing' });

@@ -96,14 +96,17 @@ describe('Group', () => {
   });
 
   it('group page with wrong commitment shows mismatch and no Pay', () => {
-    const forged = { ...blob, participants: blob.participants.map((p) => ({ ...p, address: `utest1evil${p.index}` })) };
+    const forged = { ...blob, title: 'FORGEDTITLE', participants: blob.participants.map((p) => ({ ...p, address: `utest1evil${p.index}` })) };
     const view = {
       state: 'open', stale: false, role: 'group',
       participants: forged.participants.map((p) => ({ index: p.index, address: p.address, payments: [], status_facts: facts })),
     } as unknown as TabView;
     useTab.mockReturnValue({ view, blob: forged, verified: false, error: null, stale: false, refresh: vi.fn() });
     render(<Group session={session} />);
-    expect(screen.getAllByText('Address mismatch, do not pay')).toHaveLength(4);
+    expect(screen.getAllByText('Address mismatch, do not pay')).toHaveLength(1);
+    expect(screen.queryByText('FORGEDTITLE')).toBeNull();
+    expect(screen.queryByText('Alice')).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.queryByRole('button', { name: /^Pay/ })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Pay with your wallet' })).toBeNull();
   });

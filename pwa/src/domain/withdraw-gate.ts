@@ -25,7 +25,9 @@ export function withdrawGate(
       ? balance.sweepable_zat > 0
       : balance.spendable_zat > 0 && (min === null || min >= SWEEP_CONFIRMATIONS);
   if (ready) return { kind: 'ready' };
-  if (balance.spendable_zat > 0 || balance.pending_zat > 0) {
+  // With sweepable_zat known, spendable dust never matures into a sweep: only pending notes can.
+  const mayBecomeReady = balance.sweepable_zat !== undefined ? balance.pending_zat > 0 : balance.spendable_zat > 0 || balance.pending_zat > 0;
+  if (mayBecomeReady) {
     const left = SWEEP_CONFIRMATIONS - (min ?? 0);
     return { kind: 'wait', minutes: Math.max(1, Math.ceil((left * blockIntervalSeconds) / 60)) };
   }

@@ -51,17 +51,17 @@ describe('WithdrawDialog with the real fixture PCZT', () => {
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
   });
 
-  it('shows the still-confirming line when the sweep leaves funds', () => {
+  it('shows the stays-on-the-tab line when the sweep leaves funds', () => {
     mount(prepared({ remaining_zat: 30000, pending_mempool_zat: 20000 }));
-    expect(byText('0.0005 ZEC is still confirming; you can withdraw it later.')).toBeInTheDocument();
+    expect(byText('0.0005 ZEC stays on the tab (still confirming, or too small to be worth its fee).')).toBeInTheDocument();
   });
 
   it('no line when nothing is left', () => {
     mount(prepared({ remaining_zat: 0, pending_mempool_zat: 0 }));
-    expect(screen.queryByText(/still confirming/)).toBeNull();
+    expect(screen.queryByText(/stays on the tab/)).toBeNull();
     cleanup();
     mount(prepared());
-    expect(screen.queryByText(/still confirming/)).toBeNull();
+    expect(screen.queryByText(/stays on the tab/)).toBeNull();
   });
 
   it('tampered summary: Confirm disabled with the sentence, nothing signed', async () => {

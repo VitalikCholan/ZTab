@@ -15,6 +15,18 @@ export function Group({ session }: { session: Session }) {
   if (error?.status === 429) return <ErrorScreen title="Too many requests from your network, wait a minute." />;
   if (error) return <ErrorScreen title="Something went wrong">{error.message}</ErrorScreen>;
   if (!view || !blob) return <p className="p-6 text-muted">Loading…</p>;
+  if (!verified) {
+    // The blob does not match the link: show none of its (possibly forged) content.
+    return (
+      <main className="mx-auto flex max-w-md flex-col gap-5 px-4 py-6 font-sans">
+        {(stale || view.stale) && <StaleBanner />}
+        <div role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-danger">
+          <p className="font-bold">Address mismatch, do not pay</p>
+        </div>
+        <PoweredByZcash />
+      </main>
+    );
+  }
   const b = blob as GroupBlob;
 
   return (
