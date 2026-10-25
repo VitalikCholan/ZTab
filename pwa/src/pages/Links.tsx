@@ -78,21 +78,22 @@ function LinksScreen({ created, summary }: LinksState) {
       <h1 className="text-2xl font-bold">Tab created</h1>
       <section className="flex flex-col gap-3">
         <h2 className="font-medium">Your admin link</h2>
-        <p className="font-medium text-red-700">Save this link now. It is the only key to the money. We cannot recover it.</p>
+        <p className="font-bold text-danger">Save this link now. It is the only key to the money. We cannot recover it.</p>
         <input
           readOnly
           aria-label="Admin link"
           value={created.adminUrl}
           onFocus={(e) => e.currentTarget.select()}
-          className="rounded border border-neutral-400 p-3 font-mono text-xs"
+          className="field font-mono text-xs break-all"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <CopyButton text={created.adminUrl} onDone={done} />
+          <CopyButton text={created.adminUrl} onDone={done} variant="primary" />
           <ShareButton
             title={title}
             text={`ZTab admin link for “${title}” — keep it private: ${created.adminUrl}`}
             url={created.adminUrl}
             label="Share admin link"
+            variant="secondary"
             onDone={done}
           />
         </div>
@@ -101,7 +102,7 @@ function LinksScreen({ created, summary }: LinksState) {
             type="button"
             disabled={!copied}
             onClick={() => setRevealed(true)}
-            className="rounded bg-neutral-900 px-4 py-3 font-medium text-white disabled:opacity-40"
+            className="btn-primary"
           >
             Continue
           </button>
@@ -112,13 +113,13 @@ function LinksScreen({ created, summary }: LinksState) {
           <section className="flex flex-col gap-3">
             <h2 className="font-medium">Participant links</h2>
             {created.participantLinks.map((l) => (
-              <div key={l.index} className="flex items-center justify-between gap-2 rounded border border-neutral-300 p-3">
+              <div key={l.index} className="card flex items-center justify-between gap-2">
                 <span className="min-w-0 break-words">
                   {l.index < 0
                     ? l.name
                     : `${l.name} · ${centsToUsdString(summary.participants[l.index].shareCents)}`}
                 </span>
-                <ShareButton title={title} text={textFor(l.index, l.name, l.url)} url={l.url} label={`Share ${l.name}`} failText="Copy failed" />
+                <ShareButton title={title} text={textFor(l.index, l.name, l.url)} url={l.url} label={`Share ${l.name}`} failText="Copy failed" variant="secondary" />
               </div>
             ))}
           </section>
@@ -126,7 +127,7 @@ function LinksScreen({ created, summary }: LinksState) {
             type="button"
             disabled={opening}
             onClick={() => void openAdmin()}
-            className="rounded bg-neutral-900 px-4 py-3 font-medium text-white disabled:opacity-40"
+            className="btn-primary"
           >
             Open admin page
           </button>

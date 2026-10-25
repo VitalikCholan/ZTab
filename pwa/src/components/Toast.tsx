@@ -17,7 +17,7 @@ export function useCopiedToast(failText = MANUAL_COPY_MESSAGE): { toast: ReactNo
     setMsg({ text: failText, ok: false });
   };
   const toast: ReactNode = (
-    <span role="status" className={`text-sm ${msg?.ok === false ? 'text-red-700' : 'text-green-700'}`}>
+    <span role="status" className={`text-sm ${msg?.ok === false ? 'text-danger' : 'text-ok'}`}>
       {msg?.text ?? ''}
     </span>
   );

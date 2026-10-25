@@ -31,6 +31,20 @@ export function rowStatuses(blob: GroupBlob, view: TabView): RowStatus[] {
 /** Sum of confirmed payments in zatoshi. */
 export const collectedZat = (rows: RowStatus[]) => rows.reduce((a, r) => a + (r.status?.paidZat ?? 0), 0);
 
+// Literal class names so Tailwind's scanner generates them (CSP forbids style=).
+const WIDTH_STEPS = [
+  'w-[0%]', 'w-[5%]', 'w-[10%]', 'w-[15%]', 'w-[20%]', 'w-[25%]', 'w-[30%]', 'w-[35%]', 'w-[40%]', 'w-[45%]',
+  'w-[50%]', 'w-[55%]', 'w-[60%]', 'w-[65%]', 'w-[70%]', 'w-[75%]', 'w-[80%]', 'w-[85%]', 'w-[90%]', 'w-[95%]',
+  'w-[100%]',
+] as const;
+
+/** Width class in 5 % steps, rounded down; any collected amount shows at least one step. */
+function widthClass(collectedCents: number, totalCents: number): string {
+  if (totalCents <= 0 || collectedCents <= 0) return WIDTH_STEPS[0];
+  const step = Math.floor((Math.min(collectedCents, totalCents) * 20) / totalCents);
+  return WIDTH_STEPS[Math.max(1, step)]!;
+}
+
 export function ParticipantList({
   blob,
   view,
@@ -55,15 +69,27 @@ export function ParticipantList({
       <p className="font-medium">
         {`${centsToUsdString(collectedCents)} of ${centsToUsdString(blob.total_cents)} collected · ${paid} of ${rows.length} paid`}
       </p>
+      <div
+        role="progressbar"
+        aria-label="Collected"
+        aria-valuemin={0}
+        aria-valuemax={blob.total_cents}
+        aria-valuenow={Math.min(collectedCents, blob.total_cents)}
+        className="h-2 overflow-hidden rounded-full bg-surface"
+      >
+        <div
+          className={`h-full rounded-full bg-gradient-to-r from-accent to-accent-deep motion-safe:transition-all ${widthClass(collectedCents, blob.total_cents)}`}
+        />
+      </div>
       <ul className="flex flex-col gap-3">
         {rows.map(({ participant: p, status, mismatch }) => {
           const payable = status !== null && (status.badge === 'waiting' || status.badge === 'partial');
           return (
-            <li key={p.index} className="flex flex-col gap-3 rounded border border-neutral-300 p-3">
+            <li key={p.index} className="card flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="min-w-0 break-words font-medium">{p.name}</span>
                 {mismatch ? (
-                  <span role="alert" className="rounded bg-red-100 px-3 py-1 text-sm font-bold text-red-900">
+                  <span role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-2.5 py-1 text-sm font-bold text-danger">
                     Address mismatch, do not pay
                   </span>
                 ) : (
@@ -78,7 +104,7 @@ export function ParticipantList({
                     aria-label={`Pay for ${p.name}`}
                     aria-expanded={open === p.index}
                     onClick={() => setOpen(open === p.index ? null : p.index)}
-                    className="rounded border border-neutral-900 px-4 py-3 font-medium"
+                    className="btn-secondary"
                   >
                     Pay
                   </button>

@@ -15,6 +15,7 @@ import { useTab } from '../hooks/useTab.ts';
 import type { AdminBlob } from '../tab/blobs.ts';
 import { adminLinks, type Session } from '../tab/keys.ts';
 import { prepareWithdraw, signAndBroadcast, type PreparedWithdraw } from '../tab/withdraw.ts';
+import { PoweredByZcash } from '../components/PoweredByZcash.tsx';
 
 const FALLBACK_BLOCK_SECONDS = 75;
 
@@ -73,7 +74,7 @@ export function Admin({ session }: { session: Session }) {
   if (error?.status === 404) return <ErrorScreen title="This tab does not exist or the link is wrong." />;
   if (error?.status === 429) return <ErrorScreen title="Too many requests from your network, wait a minute." />;
   if (error) return <ErrorScreen title="Something went wrong">{error.message}</ErrorScreen>;
-  if (!view || !b) return <p className="p-6">Loading…</p>;
+  if (!view || !b) return <p className="p-6 text-muted">Loading…</p>;
 
   const isStale = stale || view.stale;
   // Stale balance facts must not enable a withdrawal.
@@ -107,18 +108,18 @@ export function Admin({ session }: { session: Session }) {
   return (
     <main className="mx-auto flex max-w-md flex-col gap-5 px-4 py-6 font-sans">
       {isStale && <StaleBanner />}
-      <h1 className="text-2xl font-bold">{b.title}</h1>
+      <h1 className="text-2xl font-bold text-fg">{b.title}</h1>
       <BalanceCard collectedZat={collectedZat(rowStatuses(b, view))} sweptZat={view.balance?.swept_zat ?? 0} />
       <button
         type="button"
         disabled={gate.kind !== 'ready' || preparing || prepared !== null}
         onClick={() => void startWithdraw()}
-        className="rounded bg-neutral-900 px-4 py-4 text-lg font-semibold text-white disabled:opacity-40"
+        className="btn-primary w-full"
       >
         {preparing ? 'Preparing…' : GATE_LABEL(gate)}
       </button>
       {prepareError && (
-        <p role="alert" className="font-medium text-red-700">
+        <p role="alert" className="font-medium text-danger">
           {prepareError}
         </p>
       )}
@@ -146,16 +147,17 @@ export function Admin({ session }: { session: Session }) {
             : undefined
         }
       />
-      <p className="text-sm text-neutral-600">{footer}</p>
-      <section className="flex flex-col gap-2 border-t border-neutral-300 pt-4">
-        <h2 className="text-sm font-medium">Admin link</h2>
-        <p className="text-sm font-medium text-red-700">Save this link now. It is the only key to the money. We cannot recover it.</p>
+      <p className="text-sm text-muted">{footer}</p>
+      <PoweredByZcash />
+      <section className="flex flex-col gap-2 border-t border-line pt-4">
+        <h2 className="text-sm font-medium text-fg">Admin link</h2>
+        <p className="text-sm font-medium text-danger">Save this link now. It is the only key to the money. We cannot recover it.</p>
         <input
           readOnly
           aria-label="Admin link"
           value={session.fullUrl}
           onFocus={(e) => e.currentTarget.select()}
-          className="rounded border border-neutral-400 p-2 font-mono text-xs"
+          className="field font-mono text-xs"
         />
         <div>
           <CopyButton text={session.fullUrl} label="Copy admin link" />
