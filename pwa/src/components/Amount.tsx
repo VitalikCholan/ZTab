@@ -4,8 +4,8 @@ import { centsToUsdString, zatToZecString } from '../domain/money.ts';
 export function Amount({ cents, zat }: { cents: number; zat: number }) {
   return (
     <p>
-      <strong className="text-3xl">{centsToUsdString(cents)}</strong>{' '}
-      <span className="text-neutral-600">≈ {zatToZecString(zat)} ZEC</span>
+      <strong className="text-3xl font-bold text-fg">{centsToUsdString(cents)}</strong>{' '}
+      <span className="font-mono text-muted">≈ {zatToZecString(zat)} ZEC</span>
     </p>
   );
 }

@@ -7,6 +7,7 @@ export function ShareButton({
   label = 'Share',
   failText,
   onDone,
+  variant = 'secondary',
 }: {
   title: string;
   text: string;
@@ -15,6 +16,7 @@ export function ShareButton({
   label?: string;
   failText?: string;
   onDone?: () => void;
+  variant?: 'primary' | 'secondary';
 }) {
   const { toast, show, fail } = useCopiedToast(failText);
   const share = async () => {
@@ -43,7 +45,7 @@ export function ShareButton({
   };
   return (
     <span className="inline-flex items-center gap-2">
-      <button type="button" onClick={share} aria-label={label} className="rounded border border-neutral-900 px-4 py-3 font-medium">
+      <button type="button" onClick={share} aria-label={label} className={variant === 'primary' ? 'btn-primary' : 'btn-secondary'}>
         Share
       </button>
       {toast}

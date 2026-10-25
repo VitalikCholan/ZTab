@@ -1,6 +1,18 @@
 import { useCopiedToast } from './Toast.tsx';
 
-export function CopyButton({ text, label = 'Copy', failText, onDone }: { text: string; label?: string; failText?: string; onDone?: () => void }) {
+export function CopyButton({
+  text,
+  label = 'Copy',
+  failText,
+  onDone,
+  variant = 'primary',
+}: {
+  text: string;
+  label?: string;
+  failText?: string;
+  onDone?: () => void;
+  variant?: 'primary' | 'secondary';
+}) {
   const { toast, show, fail } = useCopiedToast(failText);
   const copy = async () => {
     try {
@@ -13,7 +25,7 @@ export function CopyButton({ text, label = 'Copy', failText, onDone }: { text: s
   };
   return (
     <span className="inline-flex items-center gap-2">
-      <button type="button" onClick={copy} aria-label={label} className="rounded bg-neutral-900 px-4 py-3 font-medium text-white">
+      <button type="button" onClick={copy} aria-label={label} className={variant === 'primary' ? 'btn-primary' : 'btn-secondary'}>
         {label}
       </button>
       {toast}

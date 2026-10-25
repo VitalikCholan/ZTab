@@ -25,6 +25,7 @@
 
   body {
     min-height: 100vh;
+    min-height: 100dvh;
     background-color: var(--color-bg);
     background-image: radial-gradient(120% 60% at 50% 0%, var(--color-glow) 0%, var(--color-bg) 55%);
     background-repeat: no-repeat;
@@ -33,7 +34,7 @@
 }
 
 @utility btn-primary {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-bold text-on-accent;
+  @apply inline-flex items-center justify-center gap-2 rounded-xl border border-transparent px-4 py-2.5 font-bold text-on-accent;
   background-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-deep));
   box-shadow: 0 6px 24px rgb(244 183 40 / 0.3);
   @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
