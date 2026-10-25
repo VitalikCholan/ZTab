@@ -66,6 +66,7 @@ const pickBalance = (b: WatcherBalance): WatcherBalance => ({
   pending_zat: b.pending_zat,
   swept_zat: b.swept_zat,
   min_unspent_confirmations: b.min_unspent_confirmations,
+  ...(b.sweepable_zat === undefined ? {} : { sweepable_zat: b.sweepable_zat }),
 });
 
 /**

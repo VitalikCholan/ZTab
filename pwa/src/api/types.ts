@@ -30,6 +30,8 @@ export interface Balance {
   pending_zat: number;
   swept_zat: number;
   min_unspent_confirmations: number | null;
+  /** Value the next sweep would send after fee; absent from older watchers. */
+  sweepable_zat?: number;
 }
 
 export interface TabView {
@@ -59,6 +61,8 @@ export interface SweepOffer {
     expiry_height: number;
     txid: string;
     pending_mempool_zat?: number;
+    /** Mined unspent tab value this sweep leaves behind; absent from older watchers. */
+    remaining_zat?: number;
   };
 }
 

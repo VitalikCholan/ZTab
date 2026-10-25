@@ -97,7 +97,7 @@ describe('WatcherClient', () => {
     it('is invalidated by sweep, even when sweep fails', async () => {
       stub.setTab('t1');
       await client.getTab('t1');
-      stub.failNext('sweep', 409, 'not every note has 10 confirmations');
+      stub.failNext('sweep', 409, 'nothing is deep enough to sweep yet');
       await expect(
         client.sweep('t1', { recipient_address: 'u1x' }),
       ).rejects.toBeInstanceOf(ApiError);
@@ -149,14 +149,14 @@ describe('WatcherClient', () => {
 
   describe('error mapping', () => {
     it('maps watcher 409 on sweep to watcher_rejected with its message', async () => {
-      stub.failNext('sweep', 409, 'not every note has 10 confirmations');
+      stub.failNext('sweep', 409, 'nothing is deep enough to sweep yet');
       const e = await expectApiError(
         client.sweep('t1', { recipient_address: 'u1x' }),
         409,
         'watcher_rejected',
         { watcher_status: 409 },
       );
-      expect(e.message).toBe('not every note has 10 confirmations');
+      expect(e.message).toBe('nothing is deep enough to sweep yet');
     });
 
     it('maps watcher 422 to the same status', async () => {

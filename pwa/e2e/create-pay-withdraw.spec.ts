@@ -75,7 +75,7 @@ test.describe('desktop', { tag: '@desktop' }, () => {
       address: opts.address,
     });
     await stub.patchTab(tabId, {
-      balance: { spendable_zat: expected.outputZat, pending_zat: 0, swept_zat: 0, min_unspent_confirmations: 12 },
+      balance: { spendable_zat: expected.outputZat, pending_zat: 0, swept_zat: 0, min_unspent_confirmations: 12, sweepable_zat: expected.outputZat },
     });
     await stub.setSweepResult(tabId, {
       pczt_b64: PCZT_B64,
