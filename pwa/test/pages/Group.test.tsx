@@ -65,11 +65,11 @@ describe('Group', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Pay for Dave' }));
     const links = screen.getAllByRole('link', { name: 'Pay with your wallet' });
     expect(links).toHaveLength(1);
-    expect(links[0]).toHaveAttribute('href', buildPaymentUri(addr(3), SHARE_ZAT, "Dinner — Dave's share"));
+    expect(links[0]).toHaveAttribute('href', buildPaymentUri(addr(3), SHARE_ZAT, 'ZTab share'));
 
     await userEvent.click(screen.getByRole('button', { name: 'Pay for Carol' }));
     const href = screen.getByRole('link', { name: 'Pay with your wallet' }).getAttribute('href')!;
-    expect(href).toBe(buildPaymentUri(addr(2), SHARE_ZAT - part, "Dinner — Carol's share"));
+    expect(href).toBe(buildPaymentUri(addr(2), SHARE_ZAT - part, 'ZTab share'));
     expect(href).toContain(addr(2));
     expect(href).toContain('amount=0.2125');
 

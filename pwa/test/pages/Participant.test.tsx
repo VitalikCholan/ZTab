@@ -50,7 +50,15 @@ describe('Participant', () => {
   it('waiting: badge and pay link for the full share', () => {
     setup();
     expect(screen.getByText('Waiting for payment')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Pay with your wallet' })).toHaveAttribute('href', buildPaymentUri(ADDR, SHARE_ZAT, "Dinner — Bob's share"));
+    expect(screen.getByRole('link', { name: 'Pay with your wallet' })).toHaveAttribute('href', buildPaymentUri(ADDR, SHARE_ZAT, 'ZTab share'));
+  });
+
+  it('pay link message is neutral', () => {
+    setup();
+    const href = screen.getByRole('link', { name: 'Pay with your wallet' }).getAttribute('href')!;
+    expect(href).toContain('message=ZTab%20share');
+    expect(href).not.toContain('Dinner');
+    expect(href).not.toContain('Bob');
   });
 
   it('seen', () => {
@@ -74,7 +82,7 @@ describe('Participant', () => {
     expect(screen.getByText('Partially paid')).toBeInTheDocument();
     expect(screen.getByText('Paid $8.00 of $12.50 · $4.50 left')).toBeInTheDocument();
     const href = screen.getByRole('link', { name: 'Pay with your wallet' }).getAttribute('href')!;
-    expect(href).toBe(buildPaymentUri(ADDR, SHARE_ZAT - paid, "Dinner — Bob's share"));
+    expect(href).toBe(buildPaymentUri(ADDR, SHARE_ZAT - paid, 'ZTab share'));
     expect(href).toContain('amount=0.01123699');
   });
 

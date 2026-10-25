@@ -5,6 +5,7 @@ import { PayPanel } from '../components/PayPanel.tsx';
 import { StaleBanner } from '../components/StaleBanner.tsx';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { centsToUsdString, zatToCents } from '../domain/money.ts';
+import { PAY_MESSAGE } from '../domain/zip321.ts';
 import { computeStatus, type StatusResult } from '../domain/status.ts';
 import { usePayBoost } from '../hooks/usePayBoost.ts';
 import { useTab } from '../hooks/useTab.ts';
@@ -70,7 +71,7 @@ export function Participant({ session }: { session: Session }) {
           <PayPanel
             address={b.address}
             zat={r.remainingZat}
-            message={`${b.title} — ${b.name}'s share`}
+            message={PAY_MESSAGE}
             mode={phone ? 'phone' : 'desktop'}
             onPayClicked={boost}
           />

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { TabView } from '../api/types.ts';
 import { centsToUsdString, zatToCents } from '../domain/money.ts';
+import { PAY_MESSAGE } from '../domain/zip321.ts';
 import { computeStatus, type Badge, type StatusResult } from '../domain/status.ts';
 import { isTouchPhone } from '../platform.ts';
 import type { BlobParticipant, GroupBlob } from '../tab/blobs.ts';
@@ -119,7 +120,7 @@ export function ParticipantList({
                 <PayPanel
                   address={p.address}
                   zat={status.remainingZat}
-                  message={`${blob.title} — ${p.name}'s share`}
+                  message={PAY_MESSAGE}
                   mode={phone ? 'phone' : 'desktop'}
                   onPayClicked={onPay}
                 />

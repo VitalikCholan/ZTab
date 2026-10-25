@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TabView } from '../../src/api/types.ts';
 import type { GroupBlob } from '../../src/tab/blobs.ts';
@@ -80,5 +81,16 @@ describe('ParticipantList progress bar', () => {
     expect(bar).toHaveAttribute('aria-valuemax', '0');
     expect(bar).toHaveAttribute('aria-valuenow', '0');
     expect(bar.firstElementChild?.classList.contains('w-[0%]')).toBe(true);
+  });
+});
+
+describe('ParticipantList pay link', () => {
+  it('pay link message is neutral', async () => {
+    setup([0, 0, 0, 0]);
+    await userEvent.click(screen.getByRole('button', { name: 'Pay for Bob' }));
+    const href = screen.getByRole('link', { name: 'Pay with your wallet' }).getAttribute('href')!;
+    expect(href).toContain('message=ZTab%20share');
+    expect(href).not.toContain('Dinner');
+    expect(href).not.toContain('Bob');
   });
 });
