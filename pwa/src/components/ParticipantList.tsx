@@ -85,11 +85,11 @@ export function ParticipantList({
         {rows.map(({ participant: p, status, mismatch }) => {
           const payable = status !== null && (status.badge === 'waiting' || status.badge === 'partial');
           return (
-            <li key={p.index} className="flex flex-col gap-3 rounded border border-neutral-300 p-3">
+            <li key={p.index} className="card flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="min-w-0 break-words font-medium">{p.name}</span>
                 {mismatch ? (
-                  <span role="alert" className="rounded bg-red-100 px-3 py-1 text-sm font-bold text-red-900">
+                  <span role="alert" className="pill border-danger/40 bg-danger/10 text-danger">
                     Address mismatch, do not pay
                   </span>
                 ) : (
@@ -104,7 +104,7 @@ export function ParticipantList({
                     aria-label={`Pay for ${p.name}`}
                     aria-expanded={open === p.index}
                     onClick={() => setOpen(open === p.index ? null : p.index)}
-                    className="rounded border border-neutral-900 px-4 py-3 font-medium"
+                    className="btn-secondary"
                   >
                     Pay
                   </button>

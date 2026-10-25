@@ -80,7 +80,7 @@ describe('WithdrawDialog with the real fixture PCZT', () => {
     expect(p).toMatchObject({ ok: false, reason: 'recipient' });
     const { onConfirm } = mount(p);
     expect(byText('Send 0.0199 ZEC to utest1ar2v…gwc4d (not your address) · fee 0.0001 ZEC')).toBeInTheDocument();
-    expect(screen.getByText('(not your address)')).toHaveClass('text-red-700');
+    expect(screen.getByText('(not your address)')).toHaveClass('text-danger');
     expect(screen.getByTitle(OUT)).toHaveTextContent('utest1ar2v…gwc4d');
     expect(screen.queryByText(other)).toBeNull();
     expect(screen.queryByText(/\(your address\)/)).toBeNull();

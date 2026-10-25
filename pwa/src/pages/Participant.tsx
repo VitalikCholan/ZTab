@@ -31,7 +31,7 @@ export function Participant({ session }: { session: Session }) {
   if (error?.status === 404) return <ErrorScreen title="This tab does not exist or the link is wrong." />;
   if (error?.status === 429) return <ErrorScreen title="Too many requests from your network, wait a minute." />;
   if (error) return <ErrorScreen title="Something went wrong">{error.message}</ErrorScreen>;
-  if (!view || !blob) return <p className="p-6">Loading…</p>;
+  if (!view || !blob) return <p className="p-6 text-muted">Loading…</p>;
   const b = blob as ParticipantBlob;
   const row =
     view.participants.find((p) => p.index === b.index) ??
@@ -47,7 +47,7 @@ export function Participant({ session }: { session: Session }) {
     body = <StatusBadge badge="unknown" />;
   } else if (b.address !== row.address) {
     body = (
-      <div role="alert" className="rounded bg-red-100 p-4 text-red-900">
+      <div role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-danger">
         <p className="font-bold">Address mismatch, do not pay</p>
       </div>
     );
@@ -58,7 +58,7 @@ export function Participant({ session }: { session: Session }) {
       <>
         <div className="flex flex-col gap-2">
           <StatusBadge badge={r.badge} />
-          {line && <p>{line}</p>}
+          {line && <p className="text-fg">{line}</p>}
         </div>
         {(r.badge === 'waiting' || r.badge === 'partial') && (
           <PayPanel
@@ -76,11 +76,11 @@ export function Participant({ session }: { session: Session }) {
   return (
     <main className="mx-auto flex max-w-md flex-col gap-5 p-6 font-sans">
       {(stale || view.stale) && <StaleBanner />}
-      <h1 className="text-2xl font-bold">{b.title}</h1>
-      <p>Hi, {b.name}</p>
+      <h1 className="text-2xl font-bold text-fg">{b.title}</h1>
+      <p className="text-muted">Hi, {b.name}</p>
       <Amount cents={b.share_cents} zat={b.share_zat} />
       {body}
-      <p className="text-sm text-neutral-600">{footer}</p>
+      <p className="text-sm text-muted">{footer}</p>
       <PoweredByZcash />
     </main>
   );

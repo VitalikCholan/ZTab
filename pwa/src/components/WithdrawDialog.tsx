@@ -52,7 +52,7 @@ function OutputAddress({ address, mine }: { address: string; mine: boolean }) {
       <span title={address} className="font-mono">
         {shortAddress(address)}
       </span>{' '}
-      {mine ? '(your address)' : <span className="font-medium text-red-700">(not your address)</span>}
+      {mine ? '(your address)' : <span className="font-medium text-danger">(not your address)</span>}
     </>
   );
 }
@@ -149,9 +149,9 @@ export function WithdrawDialog({
             </p>
           ))}
         </details>
-        <p className="text-sm text-neutral-600">Server says: {zatToZecString(prepared.serverSummary.output_zat)} ZEC</p>
+        <p className="text-sm text-muted">Server says: {zatToZecString(prepared.serverSummary.output_zat)} ZEC</p>
         {!prepared.ok && (
-          <p role="alert" className="font-medium text-red-700">
+          <p role="alert" className="font-medium text-danger">
             The server proposed a different payment. Nothing was signed.
           </p>
         )}
@@ -160,7 +160,7 @@ export function WithdrawDialog({
             type="button"
             disabled={!prepared.ok || stage.kind === 'signing'}
             onClick={() => void confirm()}
-            className="rounded bg-neutral-900 px-4 py-3 font-medium text-white disabled:opacity-40"
+            className="btn-primary"
           >
             Confirm
           </button>
@@ -168,7 +168,7 @@ export function WithdrawDialog({
             type="button"
             disabled={stage.kind === 'signing'}
             onClick={onClose}
-            className="rounded border border-neutral-900 px-4 py-3 font-medium disabled:opacity-40"
+            className="btn-secondary"
           >
             Cancel
           </button>
@@ -182,11 +182,11 @@ export function WithdrawDialog({
       <>
         <p role="status">{`Withdrawing… txid ${stage.txid.slice(0, 8)}…`}</p>
         {href && (
-          <a href={href} rel="noopener noreferrer" target="_blank" className="underline">
+          <a href={href} rel="noopener noreferrer" target="_blank" className="text-accent underline">
             View in the explorer
           </a>
         )}
-        <button type="button" onClick={onClose} className="self-start rounded border border-neutral-900 px-4 py-3 font-medium">
+        <button type="button" onClick={onClose} className="btn-secondary self-start">
           Back to the tab
         </button>
       </>
@@ -195,13 +195,13 @@ export function WithdrawDialog({
     body = (
       <>
         {stage.kind === 'withdrawn' ? (
-          <p role="status" className="font-medium text-green-800">{`Withdrawn ${zec} ZEC`}</p>
+          <p role="status" className="font-medium text-ok">{`Withdrawn ${zec} ZEC`}</p>
         ) : (
-          <p role="alert" className="font-medium text-red-700">
+          <p role="alert" className="font-medium text-danger">
             {stage.text}
           </p>
         )}
-        <button type="button" onClick={onClose} className="self-start rounded bg-neutral-900 px-4 py-3 font-medium text-white">
+        <button type="button" onClick={onClose} className="btn-primary self-start">
           Done
         </button>
       </>
@@ -209,12 +209,12 @@ export function WithdrawDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-10 flex items-end justify-center bg-black/40 sm:items-center">
+    <div className="fixed inset-0 z-10 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="withdraw-title"
-        className="flex w-full max-w-md flex-col gap-4 rounded-t-lg bg-white p-4 sm:rounded-lg"
+        className="flex w-full max-w-md flex-col gap-4 rounded-t-2xl border border-line bg-[#151821] p-4 text-fg sm:rounded-2xl"
       >
         <h2 id="withdraw-title" className="text-lg font-semibold">
           Withdraw to my wallet
