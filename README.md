@@ -12,7 +12,7 @@ Built for ZECATHON 2026, track **Shielded Payments**.
 
 You need a Zcash **testnet** wallet with shielded (Orchard) sends and a little testnet ZEC (TAZ).
 
-1. Get a wallet and TAZ. On desktop, **Vizor Testnet** (`chainapsis/vizor-wallet`, it opens `zcash:` links) is the wallet we target; the faucet is https://fauzec.com. Zingo from the App Store does not yet show testnet funds received after NU7.
+1. Get a wallet and TAZ. Tested on 2026-10-25: **Vizor Testnet** on macOS (the separate `Vizor-Testnet-macos.dmg` from `chainapsis/vizor-wallet` releases; the plain Vizor app is mainnet) paid a tab and received the withdraw. **Zingo** from the App Store on iPhone (switched to Testnet) now shows testnet funds; paying from it is not tested yet. The faucet is https://fauzec.com.
 2. Open https://ztab.dev and create a tab: a title, a total in USD, the participants' names, and a mode.
    - **Group:** one link for everyone; everyone sees everyone's status.
    - **Individual:** one link per person; each sees only their own share.

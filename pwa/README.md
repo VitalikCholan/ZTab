@@ -100,8 +100,8 @@ Policy verified by reading the build output (`pnpm --filter @ztab/pwa build`): `
 
 State as of 2026-10-18:
 
-- Zingo from the App Store (2.0.24, built before NU7 activated on testnet) switches to Testnet and syncs, but does not show testnet funds received after NU7. Zingo 2.1.0 (GitHub, zingolib 7.0.0) is expected to fix this once it reaches the store.
-- Vizor Testnet (desktop, `chainapsis/vizor-wallet`, handles the `zcash:` scheme) is the recommended desktop testnet wallet. We have not tested it.
+- Zingo from the App Store (2.0.24, built before NU7 activated on testnet) switches to Testnet and syncs, but does not show testnet funds received after NU7. Update 2026-10-25: the current App Store build shows those funds; sending from it is not tested yet.
+- Vizor Testnet (desktop, `chainapsis/vizor-wallet`, handles the `zcash:` scheme) is a separate build (`Vizor-Testnet-macos.dmg`); the plain Vizor app is mainnet. Tested 2026-10-25: received from the faucet and paid a ZTab tab, and received the withdraw.
 - Testnet faucet: https://fauzec.com (1 TAZ per day; has "Copy as zcash: link").
 - `zcash:` deep links opening a wallet on phones are desirable but unverified. The QR code and the copy buttons are always available.
 
@@ -111,4 +111,10 @@ A tab nobody opens for 30 days is deleted (API purge rule). Its links stop worki
 
 ## Manual testnet run
 
-TODO (infra, before 2026-10-28): record a full create → pay → withdraw run on testnet here.
+2026-10-25, https://ztab.dev (Hetzner CPX12, 1 vCPU, 2 GB), images `sha-2f76499`:
+
+1. Created a $5 group tab with two participants ($2 and $3) on iPhone Safari, with a Vizor Testnet address for the withdraw.
+2. Paid the two shares as separate transactions from Vizor Testnet (macOS). Both showed **Paid**; the Withdraw button became ready once every payment had 10 confirmations.
+3. Withdraw from the admin page on the iPhone: the watcher built and proved the sweep in 8.8 s, the phone signed it in the browser (wasm), the broadcast took 3.7 s, and the tab moved to `closed` after 10 confirmations (about 3.5 minutes). The funds arrived in Vizor.
+
+The first attempt failed with `watcher_unavailable`: the API waited 5 s for the sweep while proving takes about 9 s on one vCPU. Sweep now has its own 60 s timeout (`api/src/watcher/watcher.client.ts`).
