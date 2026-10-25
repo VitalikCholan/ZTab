@@ -89,7 +89,7 @@ export function ParticipantList({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="min-w-0 break-words font-medium">{p.name}</span>
                 {mismatch ? (
-                  <span role="alert" className="pill border-danger/40 bg-danger/10 text-danger">
+                  <span role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-2.5 py-1 text-sm font-bold text-danger">
                     Address mismatch, do not pay
                   </span>
                 ) : (
