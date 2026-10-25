@@ -213,6 +213,27 @@ describe('WatcherClient', () => {
       await expectApiError(client.health(), 503, 'watcher_unavailable');
     });
 
+    it('gives sweep (proving) the longer timeout, other calls keep the short one', async () => {
+      // Proving takes ~9 s on a 1 vCPU VPS; the 5 s default turned every withdraw into a 503.
+      const c = new WatcherClient(config(stub.url), { timeoutMs: 200, slowTimeoutMs: 2000 });
+      stub.setTab('t1');
+      stub.setDelay(600);
+      const s = await c.sweep('t1', { recipient_address: 'u1x' });
+      expect(s.summary.fee_zat).toBe(10000);
+      await expectApiError(c.health(), 503, 'watcher_unavailable');
+    });
+
+    it('maps a sweep slower than the slow timeout to 503', async () => {
+      const c = new WatcherClient(config(stub.url), { timeoutMs: 100, slowTimeoutMs: 300 });
+      stub.setTab('t1');
+      stub.setDelay(600);
+      await expectApiError(
+        c.sweep('t1', { recipient_address: 'u1x' }),
+        503,
+        'watcher_unavailable',
+      );
+    });
+
     it('maps connection refused to 503', async () => {
       const dead = new StubWatcher();
       await dead.start();
