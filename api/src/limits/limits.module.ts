@@ -44,6 +44,13 @@ class LimitsConfigModule {}
             skipIf: (ctx) => !usesCreateBudget(ctx.getHandler()),
           },
           {
+            // After `create`, so a request refused per IP is not counted here.
+            name: 'createGlobal',
+            limit: limits.createGlobal.limit,
+            ttl: limits.createGlobal.ttlMs,
+            skipIf: (ctx) => !usesCreateBudget(ctx.getHandler()),
+          },
+          {
             name: 'default',
             limit: limits.default.limit,
             ttl: limits.default.ttlMs,

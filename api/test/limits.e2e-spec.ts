@@ -63,6 +63,7 @@ describe('limits (real values)', () => {
   it('pins the spec values', () => {
     expect(DEFAULT_LIMITS).toEqual({
       create: { limit: 10, ttlMs: 3_600_000 },
+      createGlobal: { limit: 500, ttlMs: 3_600_000 },
       default: { limit: 120, ttlMs: 60_000 },
     });
   });
@@ -96,6 +97,7 @@ describe('limits (real values)', () => {
 describe('limits (lowered)', () => {
   const low: LimitsOptions = {
     create: { limit: 3, ttlMs: 3_600_000 },
+    createGlobal: { limit: 1000, ttlMs: 3_600_000 },
     default: { limit: 4, ttlMs: 60_000 },
   };
   beforeEach(() => boot(low));
@@ -135,6 +137,27 @@ describe('limits (lowered)', () => {
   });
 });
 
+describe('global create limit', () => {
+  const N = 4;
+  beforeEach(() =>
+    boot({
+      create: { limit: 100, ttlMs: 3_600_000 },
+      createGlobal: { limit: N, ttlMs: 3_600_000 },
+      default: { limit: 100, ttlMs: 60_000 },
+    }),
+  );
+
+  it('global create limit returns 429 after N creates from different IPs', async () => {
+    for (let i = 0; i < N; i++) await put(`10.0.0.${i + 1}`).expect(201);
+    const res = await put('10.0.1.1').expect(429);
+    expect(res.body).toEqual({
+      error: { code: 'rate_limited', message: expect.any(String) },
+    });
+    // Other routes keep their own budget.
+    await request(app.getHttpServer()).get('/status').expect(200);
+  });
+});
+
 describe('CORS and helmet', () => {
   beforeEach(() => boot());
 
@@ -159,6 +182,15 @@ describe('CORS and helmet', () => {
       .get('/status')
       .set('Origin', 'https://evil.example');
     expect(get.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('api responses carry Cache-Control no-store', async () => {
+    const ok = await request(app.getHttpServer()).get('/healthz').expect(200);
+    expect(ok.headers['cache-control']).toBe('no-store');
+    const missing = await request(app.getHttpServer()).get(`/tabs/${randomUUID()}`).expect(401);
+    expect(missing.headers['cache-control']).toBe('no-store');
+    const notFound = await request(app.getHttpServer()).get('/nope').expect(404);
+    expect(notFound.headers['cache-control']).toBe('no-store');
   });
 
   it('sets helmet headers', async () => {

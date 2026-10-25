@@ -1,3 +1,4 @@
+import type { NextFunction, Request, Response } from 'express';
 import type { INestApplication } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
@@ -17,6 +18,11 @@ export function configureApp(app: INestApplication): void {
   const config = app.get<Config>(CONFIG);
   express.use(requestLogger());
   express.use(helmet());
+  // Responses carry per-tab data and tokens' effects: no cache may keep any of them.
+  express.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
   // Only the PWA origin; no cookies, so no credentials.
   express.enableCors({
     // A function, not a string: a string makes the cors package answer every

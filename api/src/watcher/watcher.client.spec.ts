@@ -24,6 +24,7 @@ describe('WatcherClient', () => {
     corsOrigin: 'x',
     port: 0,
     rateLimitCreatePerHour: 10,
+    rateLimitCreateGlobalPerHour: 500,
     rateLimitDefaultPerMinute: 120,
     rateUrl: 'x',
   });

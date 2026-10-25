@@ -13,6 +13,7 @@ describe('loadConfig', () => {
     expect(cfg.databaseUrl).toBe(base.DATABASE_URL);
     expect(cfg.watcherToken).toBe('secret');
     expect(cfg.rateLimitCreatePerHour).toBe(10);
+    expect(cfg.rateLimitCreateGlobalPerHour).toBe(500);
     expect(cfg.rateLimitDefaultPerMinute).toBe(120);
   });
 

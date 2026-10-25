@@ -82,13 +82,23 @@ export class TabsService {
     if (existing) return this.retry(existing, input, blobs, authorization);
 
     // Register first: if the watcher refuses, nothing is stored.
-    const registered = await this.watcher.registerTab({
-      tab_id: id,
-      ufvk: input.ufvk,
-      birthday: input.birthday,
-      participants_count: input.participants_count,
-    });
-    const addresses = this.checkedAddresses(registered, input.participants_count);
+    let addresses: { index: number; address: string }[];
+    try {
+      const registered = await this.watcher.registerTab({
+        tab_id: id,
+        ufvk: input.ufvk,
+        birthday: input.birthday,
+        participants_count: input.participants_count,
+      });
+      addresses = this.checkedAddresses(registered, input.participants_count);
+    } catch (e) {
+      // A timeout or 5xx may still have registered the tab at the watcher.
+      // A 4xx refusal registered nothing.
+      if (!(e instanceof ApiError && e.status >= 400 && e.status < 500)) {
+        await this.pauseOrphan(id);
+      }
+      throw e;
+    }
 
     try {
       // A nested create is a single transaction: tab, addresses, blobs, tokens.
@@ -119,11 +129,27 @@ export class TabsService {
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        await this.pauseOrphan(id);
         throw new ApiError(409, 'conflict', 'tab or token already exists');
       }
+      await this.pauseOrphan(id);
       throw e;
     }
     return { status: 201, body: { tab_id: id, addresses } };
+  }
+
+  /**
+   * Best effort: stop the watcher scanning a tab we failed to store. Never
+   * throws and never changes the response the client gets.
+   */
+  private async pauseOrphan(id: string): Promise<void> {
+    try {
+      await this.watcher.setActive(id, false);
+    } catch (e) {
+      this.logger.warn(
+        `could not pause an unstored watcher tab: ${e instanceof ApiError ? e.code : 'unknown error'}`,
+      );
+    }
   }
 
   /**

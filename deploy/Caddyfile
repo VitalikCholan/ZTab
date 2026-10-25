@@ -44,6 +44,7 @@
 			Referrer-Policy no-referrer
 			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
 			X-Content-Type-Options nosniff
+			Cross-Origin-Opener-Policy "same-origin"
 		}
 		root * /srv/pwa
 		# Hashed bundles that exist never change. A missing one (removed by a redeploy) gets a
