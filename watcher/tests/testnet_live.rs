@@ -1023,7 +1023,7 @@ async fn full_tab_lifecycle_on_testnet() {
     }
     let early = early.expect("the tab never stayed synced long enough to ask for a sweep");
     assert!(
-        early.contains("not every note has 10 confirmations"),
+        early.contains("nothing is deep enough to sweep yet"),
         "early sweep refused for another reason: {early}"
     );
     common::wait_until(

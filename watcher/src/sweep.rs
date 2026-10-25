@@ -1,4 +1,4 @@
-//! PCZT sweeps: the watcher proposes, creates and proves the sweep of a tab's whole balance;
+//! PCZT sweeps: the watcher proposes, creates and proves the sweep of a tab's deep notes;
 //! the payer's browser signs it; the watcher checks that the signed PCZT is the one it
 //! offered, extracts the transaction and broadcasts it. No spending key ever reaches here.
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
 use pczt::{roles::prover::Prover, Pczt};
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap, HashSet},
     convert::Infallible,
     num::NonZeroU32,
     sync::{atomic::Ordering, Arc},
@@ -20,17 +20,21 @@ use zcash_address::{ConversionError, ZcashAddress};
 use zcash_client_backend::{
     data_api::{
         error::Error as BackendError,
+        locking::LockOwner,
         wallet::{
             create_pczt_from_proposal, extract_and_store_transaction_from_pczt,
             input_selection::LockedInputPolicy, propose_send_max_transfer, ConfirmationsPolicy,
         },
-        MaxSpendMode, WalletRead,
+        MaxSpendMode, OutputLockStore, WalletRead,
     },
     fees::{ChangeError, StandardFeeRule},
+    proposal::Proposal,
     proto::service,
-    wallet::OvkPolicy,
+    wallet::{OutputRef, OvkPolicy, ReceivedNote},
 };
-use zcash_client_sqlite::{error::SqliteClientError, util::SystemClock, AccountUuid};
+use zcash_client_sqlite::{
+    error::SqliteClientError, util::SystemClock, AccountUuid, ReceivedNoteId,
+};
 use zcash_keys::address::Address;
 use zcash_primitives::transaction::{
     builder::BundlePadding,
@@ -40,7 +44,7 @@ use zcash_primitives::transaction::{
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::{
     consensus::{BranchId, Network, Parameters},
-    ShieldedPool, TxId,
+    PoolType, ShieldedPool, TxId,
 };
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -54,6 +58,10 @@ pub struct SweepSummary {
     /// behind (they can be swept later, from `closed` too). The browser warns before
     /// signing; nothing is swept automatically.
     pub pending_mempool_zat: u64,
+    /// Mined unspent value of the tab that this sweep leaves behind: notes not deep enough
+    /// yet, dust, and notes past the input cap. A later sweep takes it; mempool payments are
+    /// in `pending_mempool_zat`, not here.
+    pub remaining_zat: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -191,10 +199,12 @@ fn reload(state: &AppState, tab_id: Uuid) -> Result<TabRow, WatcherError> {
         .ok_or_else(|| WatcherError::NotFound(format!("tab {tab_id}")))
 }
 
-/// Proposes sending the tab's entire balance (Orchard and Ironwood) to `recipient`, creates
-/// the PCZT, proves it, and records it as the tab's current offer. Fails with `Conflict`
-/// unless the tab is open and every note has `confirmations_sweep` confirmations, or while
-/// another offer/broadcast for the tab is in progress.
+/// Proposes sending the tab's deep notes (Orchard and Ironwood) to `recipient`, creates the
+/// PCZT, proves it, and records it as the tab's current offer. The notes spent are exactly
+/// those [`crate::facts::plan_sweep`] counts: at least `confirmations_sweep` deep, worth more
+/// than their marginal fee, the largest [`crate::facts::SWEEP_MAX_INPUTS`]. Fails with
+/// `Conflict` unless the tab is open or closed and has such notes, or while another
+/// offer/broadcast for the tab is in progress.
 pub async fn create_proved_pczt(
     state: &AppState,
     tab: &TabRow,
@@ -236,38 +246,7 @@ fn create_proved_pczt_blocking(
     let started = std::time::Instant::now();
     let (pczt, inputs_zat, output_zat, fee_zat) = {
         let mut db = state.wallet.db();
-        let proposal = propose_send_max_transfer::<_, _, _, Infallible>(
-            &mut *db,
-            &network,
-            account,
-            &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
-            &StandardFeeRule::Zip317,
-            recipient,
-            // Never a memo: memos are not stored or relayed by the watcher.
-            None,
-            // Everything, not MaxSpendable: a note below the confirmation depth fails the
-            // proposal instead of being silently left behind.
-            MaxSpendMode::Everything,
-            policy,
-            &LockedInputPolicy::Exclude,
-            None,
-        )
-        .map_err(|e| match e {
-            // Not spendable (yet): explained below, once the wallet lock is released.
-            BackendError::DataSource(SqliteClientError::IneligibleNotes)
-            | BackendError::InsufficientFunds { .. }
-            | BackendError::Change(ChangeError::InsufficientFunds { .. }) => None,
-            BackendError::ScanRequired => Some(WatcherError::Conflict(
-                "the tab is not synced yet; retry shortly".into(),
-            )),
-            BackendError::Payment(e) => {
-                tracing::debug!(error = %e, "sweep payment rejected");
-                Some(WatcherError::Unprocessable(
-                    "recipient: cannot receive this payment".into(),
-                ))
-            }
-            e => Some(WatcherError::Wallet(format!("propose: {e:?}"))),
-        });
+        let proposal = propose_sweep(&mut db, &network, account, &recipient, policy);
         let proposal = match proposal {
             Ok(p) => p,
             Err(Some(e)) => return Err(e),
@@ -282,6 +261,12 @@ fn create_proved_pczt_blocking(
             ));
         }
         let step = proposal.steps().first();
+        // The signer accepts only outputs that pay the recipient: a sweep never has change.
+        if !step.balance().proposed_change().is_empty() {
+            return Err(WatcherError::Wallet(
+                "sweep proposal has change outputs".into(),
+            ));
+        }
         let inputs_zat: u64 = step.shielded_inputs().map_or(0, |i| {
             i.notes().iter().map(|n| u64::from(n.note().value())).sum()
         });
@@ -310,6 +295,13 @@ fn create_proved_pczt_blocking(
     let created = started.elapsed();
     let pending_mempool_zat =
         crate::facts::tab_pending_mempool_zat(&state.wallet, &state.meta, &state.cfg, tab)?;
+    let tip = state.health.tip_height.load(Ordering::Relaxed);
+    let mined_unspent_zat: u64 = crate::facts::unspent_notes(&state.wallet, tab.account_uuid, tip)?
+        .iter()
+        .filter(|n| n.mined_height.is_some())
+        .map(|n| n.value_zat)
+        .sum();
+    let remaining_zat = mined_unspent_zat.saturating_sub(inputs_zat);
     let txid = txid_of(pczt.clone())?;
     let expiry_height = *pczt.global().expiry_height();
     let pczt = prove(pczt)?;
@@ -332,6 +324,7 @@ fn create_proved_pczt_blocking(
             expiry_height,
             txid,
             pending_mempool_zat,
+            remaining_zat,
         },
     })
 }
@@ -358,9 +351,139 @@ fn not_spendable(state: &AppState, tab_id: Uuid) -> Result<WatcherError, Watcher
         )));
     }
     Ok(WatcherError::Conflict(format!(
-        "not every note has {} confirmations yet (or the tab holds no funds); wait and retry",
+        "nothing is deep enough to sweep yet (notes need {} confirmations and more value than their fee); wait and retry",
         state.cfg.confirmations_sweep
     )))
+}
+
+type SweepProposal = Proposal<StandardFeeRule, ReceivedNoteId>;
+
+/// Lock owner for the notes a capped sweep leaves out. Fixed, so a retry after a crash
+/// between lock and unlock re-acquires its own locks instead of failing on them.
+const EXCESS_LOCK_OWNER: LockOwner = LockOwner::new(*b"ztab-watcher/sweep-excess-notes!");
+
+fn output_ref(n: &ReceivedNote<ReceivedNoteId, zcash_client_backend::wallet::Note>) -> OutputRef {
+    OutputRef::new(
+        *n.txid(),
+        PoolType::Shielded(n.note().pool()),
+        u32::from(n.output_index()),
+    )
+}
+
+fn proposal_inputs(p: &SweepProposal) -> Vec<OutputRef> {
+    p.steps()
+        .iter()
+        .flat_map(|s| {
+            s.shielded_inputs()
+                .into_iter()
+                .flat_map(|i| i.notes().iter().map(output_ref))
+        })
+        .collect()
+}
+
+/// The sweep proposal: every spendable note (`MaxSpendable`: deep enough and worth more than
+/// the marginal fee, as `plan_sweep` counts) to `recipient`, no change. With more than
+/// [`crate::facts::SWEEP_MAX_INPUTS`] such notes, the ones past the cap
+/// ([`crate::facts::choose_sweep_inputs`]) are excluded through short-lived input locks and
+/// the proposal is made again, so the wallet still does fee and bundle accounting. `Err(None)`
+/// means nothing is spendable.
+fn propose_sweep(
+    db: &mut crate::wallet::Db,
+    network: &Network,
+    account: AccountUuid,
+    recipient: &ZcashAddress,
+    policy: ConfirmationsPolicy,
+) -> Result<SweepProposal, Option<WatcherError>> {
+    let first = propose_max(db, network, account, recipient, policy)?;
+    let notes: Vec<_> = first
+        .steps()
+        .first()
+        .shielded_inputs()
+        .map_or_else(Vec::new, |i| i.notes().iter().collect());
+    if notes.len() <= crate::facts::SWEEP_MAX_INPUTS {
+        return Ok(first);
+    }
+    let values: Vec<u64> = notes.iter().map(|n| u64::from(n.note().value())).collect();
+    let keep: HashSet<usize> = crate::facts::choose_sweep_inputs(&values)
+        .into_iter()
+        .collect();
+    let (chosen, excess): (Vec<_>, Vec<_>) = notes
+        .iter()
+        .enumerate()
+        .partition(|(i, _)| keep.contains(i));
+    let chosen: BTreeSet<OutputRef> = chosen.into_iter().map(|(_, n)| output_ref(n)).collect();
+    let excess: Vec<OutputRef> = excess.into_iter().map(|(_, n)| output_ref(n)).collect();
+    let werr =
+        |what: &str, e: &dyn std::fmt::Debug| Some(WatcherError::Wallet(format!("{what}: {e:?}")));
+    // Locked while `expiry >= target height` (tip + 1): until the next block at most, so a
+    // crash before the unlock below delays these notes by a block, nothing more. The wallet
+    // lock is held throughout; no other proposal runs meanwhile.
+    let tip = db
+        .chain_height()
+        .map_err(|e| werr("chain height", &e))?
+        .ok_or_else(|| {
+            Some(WatcherError::Conflict(
+                "the tab is not synced yet; retry shortly".into(),
+            ))
+        })?;
+    db.lock_outputs(&excess, EXCESS_LOCK_OWNER, tip + 1)
+        .map_err(|e| werr("lock excess notes", &e))?;
+    let capped = propose_max(db, network, account, recipient, policy);
+    for r in &excess {
+        if let Err(e) = db.unlock_output(r, EXCESS_LOCK_OWNER) {
+            tracing::warn!(error = ?e, "unlocking a sweep-excluded note failed; it frees at the next block");
+        }
+    }
+    let capped = capped?;
+    let spent: BTreeSet<OutputRef> = proposal_inputs(&capped).into_iter().collect();
+    if spent != chosen {
+        return Err(Some(WatcherError::Wallet(
+            "capped sweep proposal does not spend the chosen notes".into(),
+        )));
+    }
+    Ok(capped)
+}
+
+/// `propose_send_max_transfer` with `MaxSpendable`: notes below the confirmation depth or
+/// worth no more than their marginal fee are left behind (and reported as remaining), not a
+/// failure. Locked notes are never spent.
+fn propose_max(
+    db: &mut crate::wallet::Db,
+    network: &Network,
+    account: AccountUuid,
+    recipient: &ZcashAddress,
+    policy: ConfirmationsPolicy,
+) -> Result<SweepProposal, Option<WatcherError>> {
+    propose_send_max_transfer::<_, _, _, Infallible>(
+        db,
+        network,
+        account,
+        &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
+        &StandardFeeRule::Zip317,
+        recipient.clone(),
+        // Never a memo: memos are not stored or relayed by the watcher.
+        None,
+        MaxSpendMode::MaxSpendable,
+        policy,
+        &LockedInputPolicy::Exclude,
+        None,
+    )
+    .map_err(|e| match e {
+        // Not spendable (yet): explained by the caller, once the wallet lock is released.
+        BackendError::DataSource(SqliteClientError::IneligibleNotes)
+        | BackendError::InsufficientFunds { .. }
+        | BackendError::Change(ChangeError::InsufficientFunds { .. }) => None,
+        BackendError::ScanRequired => Some(WatcherError::Conflict(
+            "the tab is not synced yet; retry shortly".into(),
+        )),
+        BackendError::Payment(e) => {
+            tracing::debug!(error = %e, "sweep payment rejected");
+            Some(WatcherError::Unprocessable(
+                "recipient: cannot receive this payment".into(),
+            ))
+        }
+        e => Some(WatcherError::Wallet(format!("propose: {e:?}"))),
+    })
 }
 
 /// The Orchard-family circuit for a PCZT's consensus branch. Orchard and Ironwood share
