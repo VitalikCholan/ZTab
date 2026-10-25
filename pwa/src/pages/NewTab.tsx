@@ -151,7 +151,7 @@ export function NewTab() {
             maxLength={80}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="rounded border border-neutral-400 p-3"
+            className="field"
           />
         </div>
         <div className="flex flex-col gap-1">
@@ -163,27 +163,27 @@ export function NewTab() {
             inputMode="decimal"
             value={totalText}
             onChange={(e) => setTotalText(e.target.value)}
-            className="rounded border border-neutral-400 p-3"
+            className="field"
           />
-          {totalZec && <p className="text-sm text-neutral-600">{`≈ ${totalZec} ZEC`}</p>}
+          {totalZec && <p className="text-sm text-muted">{`≈ ${totalZec} ZEC`}</p>}
         </div>
         <RateField state={rate} manual={manual} onManual={setManual} onRefresh={loadRate} />
         <ParticipantsEditor rows={rows} totalCents={totalCents} usdPerZec={usdPerZec} onChange={setRows} />
-        <div role="radiogroup" aria-label="Mode" className="flex flex-col gap-2">
-          <label className="flex items-start gap-2 rounded border border-neutral-300 p-3">
-            <input type="radio" name="mode" checked={mode === 'group'} onChange={() => setMode('group')} />
+        <div role="radiogroup" aria-label="Mode" className="card flex flex-col gap-2">
+          <label className="flex items-start gap-2 rounded-xl border border-line p-3 has-[:checked]:border-accent has-[:checked]:bg-accent/10">
+            <input type="radio" className="accent-accent" name="mode" checked={mode === 'group'} onChange={() => setMode('group')} />
             <span>
               <b>Group</b>
               <br />
-              <span className="text-sm text-neutral-600">one link, everyone sees everyone's status</span>
+              <span className="text-sm text-muted">one link, everyone sees everyone's status</span>
             </span>
           </label>
-          <label className="flex items-start gap-2 rounded border border-neutral-300 p-3">
-            <input type="radio" name="mode" checked={mode === 'individual'} onChange={() => setMode('individual')} />
+          <label className="flex items-start gap-2 rounded-xl border border-line p-3 has-[:checked]:border-accent has-[:checked]:bg-accent/10">
+            <input type="radio" className="accent-accent" name="mode" checked={mode === 'individual'} onChange={() => setMode('individual')} />
             <span>
               <b>Individual</b>
               <br />
-              <span className="text-sm text-neutral-600">a separate link per person, each sees only their own share</span>
+              <span className="text-sm text-muted">a separate link per person, each sees only their own share</span>
             </span>
           </label>
         </div>
@@ -200,25 +200,25 @@ export function NewTab() {
       </fieldset>
 
       {failure?.kind === 'mismatch' && (
-        <p role="alert" className="text-red-700">The server returned addresses that do not match this tab</p>
+        <p role="alert" className="rounded-xl border border-danger/40 p-3 text-danger">The server returned addresses that do not match this tab</p>
       )}
       {failure?.kind === 'api' && (
-        <div role="alert" className="flex flex-col gap-2 text-red-700">
+        <div role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/40 p-3 text-danger">
           <p>{`Could not create the tab (${failure.error.code})`}</p>
-          <button type="button" onClick={() => void submit()} className="w-fit rounded border border-red-700 px-4 py-3">
+          <button type="button" onClick={() => void submit()} className="btn-secondary w-fit">
             Retry
           </button>
         </div>
       )}
       {failure?.kind === 'network' && (
-        <div role="alert" className="flex flex-col gap-2 text-red-700">
+        <div role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/40 p-3 text-danger">
           <p>No response from the server. The tab may or may not have been created.</p>
           <div className="flex gap-2">
             <button
               type="button"
               disabled={busy}
               onClick={() => void retryNetwork(failure.error)}
-              className="rounded border border-red-700 px-4 py-3 disabled:opacity-40"
+              className="btn-secondary"
             >
               Retry
             </button>
@@ -230,7 +230,7 @@ export function NewTab() {
                 pending.current = null;
                 setFailure(null);
               }}
-              className="rounded border border-neutral-400 px-4 py-3 text-neutral-900"
+              className="btn-secondary"
             >
               Cancel
             </button>
@@ -242,7 +242,7 @@ export function NewTab() {
         type="button"
         disabled={!valid || busy}
         onClick={() => void submit()}
-        className="rounded bg-neutral-900 px-4 py-4 text-lg font-medium text-white disabled:opacity-40"
+        className="btn-primary w-full"
       >
         {label}
       </button>

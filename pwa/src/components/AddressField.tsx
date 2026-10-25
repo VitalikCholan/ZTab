@@ -30,9 +30,9 @@ export function AddressField({
         autoCorrect="off"
         spellCheck={false}
         aria-invalid={check === 'invalid'}
-        className="rounded border border-neutral-400 p-3 font-mono text-sm"
+        className="field font-mono text-sm break-all"
       />
-      <p className={`text-sm ${check === 'invalid' ? 'text-red-700' : 'text-neutral-600'}`}>
+      <p className={`text-sm ${check === 'invalid' ? 'text-danger' : 'text-muted'}`}>
         Use a unified address with an Orchard receiver ({network === 'test' ? 'testnet' : 'mainnet'} addresses start
         with {prefix}).
       </p>

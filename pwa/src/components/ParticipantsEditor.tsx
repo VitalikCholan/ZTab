@@ -25,12 +25,12 @@ export function ParticipantsEditor({
   const splittable = totalCents !== null && totalCents > 0;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="card flex flex-col gap-3">
       <h2 className="font-medium">Participants</h2>
       {rows.map((r, i) => {
         const cents = parseUsdInput(r.share);
         return (
-          <div key={i} className="flex flex-col gap-1 rounded border border-neutral-300 p-3">
+          <div key={i} className="flex flex-col gap-1 rounded-xl border border-line p-3">
             <div className="flex gap-2">
               <input
                 aria-label={`Name ${i + 1}`}
@@ -38,14 +38,14 @@ export function ParticipantsEditor({
                 maxLength={40}
                 value={r.name}
                 onChange={(e) => set(i, { name: e.target.value })}
-                className="min-w-0 flex-1 rounded border border-neutral-400 p-3"
+                className="field min-w-0 flex-1"
               />
               <button
                 type="button"
                 aria-label={`Remove participant ${i + 1}`}
                 disabled={rows.length <= 1}
                 onClick={() => onChange(rows.filter((_, j) => j !== i))}
-                className="rounded border border-neutral-400 px-3 disabled:opacity-40"
+                className="btn-secondary px-3"
               >
                 ✕
               </button>
@@ -58,9 +58,9 @@ export function ParticipantsEditor({
                 placeholder="0.00"
                 value={r.share}
                 onChange={(e) => set(i, { share: e.target.value })}
-                className="min-w-0 flex-1 rounded border border-neutral-400 p-3"
+                className="field min-w-0 flex-1"
               />
-              <span className="text-sm text-neutral-600">
+              <span className="text-sm text-muted">
                 {cents !== null && cents > 0 && usdPerZec ? `≈ ${zatToZecString(centsToZat(cents, usdPerZec))} ZEC` : ''}
               </span>
             </div>
@@ -72,7 +72,7 @@ export function ParticipantsEditor({
           type="button"
           disabled={rows.length >= MAX_PARTICIPANTS}
           onClick={() => onChange([...rows, { name: '', share: '' }])}
-          className="rounded border border-neutral-400 px-4 py-3 disabled:opacity-40"
+          className="btn-secondary"
         >
           Add participant
         </button>
@@ -80,13 +80,13 @@ export function ParticipantsEditor({
           type="button"
           disabled={!splittable}
           onClick={() => onChange(rows.map((r, i) => ({ ...r, share: centsToUsdString(splitEqually(totalCents!, rows.length)[i]).slice(1) })))}
-          className="rounded border border-neutral-400 px-4 py-3 disabled:opacity-40"
+          className="btn-secondary"
         >
           Split equally
         </button>
       </div>
       {totalCents !== null && (
-        <p className={diff === 0 ? 'text-neutral-700' : 'text-red-700'}>
+        <p className={diff === 0 ? 'text-muted' : 'text-danger'}>
           {`Assigned ${centsToUsdString(assigned)} of ${centsToUsdString(totalCents)}`}
           {diff > 0 && ` · ${centsToUsdString(diff)} left`}
           {diff < 0 && ` · ${centsToUsdString(-diff)} over`}

@@ -25,7 +25,7 @@ export function RateField({
   onRefresh: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="card flex flex-col gap-1">
       {state.kind === 'failed' ? (
         <>
           <label htmlFor="rate" className="font-medium">
@@ -36,18 +36,18 @@ export function RateField({
             inputMode="decimal"
             value={manual}
             onChange={(e) => onManual(e.target.value)}
-            className="rounded border border-neutral-400 p-3"
+            className="field"
           />
-          <p className="text-sm text-neutral-600">Enter the rate manually</p>
+          <p className="text-sm text-muted">Enter the rate manually</p>
         </>
       ) : (
-        <p className="text-sm text-neutral-700">
+        <p className="text-sm text-muted">
           {state.kind === 'ok'
             ? `1 ZEC = $${state.rate.usd_per_zec} · updated ${hhmm(state.rate.fetched_at)}`
             : 'Loading rate…'}
         </p>
       )}
-      <button type="button" onClick={onRefresh} className="w-fit rounded border border-neutral-400 px-3 py-2 text-sm">
+      <button type="button" onClick={onRefresh} className="btn-secondary w-fit text-sm">
         Refresh
       </button>
     </div>
