@@ -1,0 +1,16 @@
+# Local rehearsal override (used by rehearsal.sh): locally built images, DOMAIN=localhost with
+# Caddy's local CA, and Caddy bound to 127.0.0.1 only.
+services:
+  caddy:
+    ports: !override
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
+    environment:
+      DOMAIN: localhost
+      CADDY_LOCAL_CERTS: local_certs
+  pwa:
+    image: ztab-pwa:rehearsal
+  api:
+    image: ztab-api:rehearsal
+  watcher:
+    image: ztab-watcher:rehearsal

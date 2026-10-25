@@ -34,6 +34,18 @@ curl localhost:8787/v1/health
 | `ZTAB_BLOCK_INTERVAL_SECONDS` | `25` on testnet, `75` on mainnet | Sets the sync-loop pace (half a block, at least 5 s) and the mempool-sighting expiry (120 blocks). |
 | `ZTAB_LISTEN` | `127.0.0.1:8787` | HTTP listen address. |
 
+## Container
+
+```sh
+docker build -f watcher/Dockerfile -t ztab-watcher:dev watcher   # cargo-chef, bookworm-slim runtime
+docker run --rm -d --name ztab-watcher -e ZTAB_API_TOKEN=change-me \
+  -v ztab_data:/data -p 127.0.0.1:8787:8787 ztab-watcher:dev
+```
+
+- Runs as the non-root user `watcher` (uid 10001); entrypoint `/usr/local/bin/ztab-watcher`.
+- Image defaults: `ZTAB_DATA_DIR=/data` (declared `VOLUME /data`, holds the wallet DB, so keep it on a named volume) and `ZTAB_LISTEN=0.0.0.0:8787`. `ZTAB_API_TOKEN` is required; the other variables above keep their defaults (testnet, `https://testnet.zec.rocks:443`).
+- `HEALTHCHECK` curls `http://127.0.0.1:8787/v1/health`, which is public (no token). It answers 200 as soon as the HTTP server binds, before the first sync, so `healthy` means up, not synced; read `synced_height` and `lag_seconds` in the body (the API's `/api/status` turns them into `ok`/`stale`).
+
 ## HTTP API
 
 Every route except `GET /v1/health` requires the bearer token.

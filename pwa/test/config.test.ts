@@ -36,4 +36,8 @@ describe('loadConfig', () => {
       loadConfig({ ...base, VITE_EXPLORER_TX_URL: '' } as unknown as ImportMetaEnv).explorerTxUrl,
     ).toBeNull();
   });
+  it('accepts a relative VITE_API_URL', () => {
+    const c = loadConfig({ VITE_API_URL: '/api', VITE_NETWORK: 'test' } as unknown as ImportMetaEnv);
+    expect(c.apiUrl).toBe('/api');
+  });
 });

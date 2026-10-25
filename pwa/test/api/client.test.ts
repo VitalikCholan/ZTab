@@ -117,4 +117,11 @@ describe('ApiClient', () => {
       expect(call(fetchImpl, i).headers.get('authorization')).toBe(`Bearer ${encodeToken(TOKEN)}`);
     }
   });
+
+  it('requests resolve against the page origin when baseUrl is a path', async () => {
+    const fetchImpl = vi.fn(async () => json(200, { status: 'ok' }));
+    await new ApiClient('/api', fetchImpl as unknown as typeof fetch).status().catch(() => undefined);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe('/api/status');
+  });
 });

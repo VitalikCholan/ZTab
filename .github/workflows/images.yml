@@ -1,0 +1,93 @@
+name: Images
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# One publish at a time per ref, so a late run cannot interleave with a newer one.
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # workflow_run runs with write permissions and checks out head_sha, so it must only
+    # accept CI runs of a push to main in THIS repo. The `branches: [main]` trigger filter
+    # matches the head branch NAME only: a fork PR from a branch called `main` would
+    # otherwise publish attacker code to GHCR and poison the build cache.
+    # Tag pushes and manual dispatch are trusted refs and stay allowed.
+    if: >-
+      github.event_name != 'workflow_run' || (
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            dockerfile: api/Dockerfile
+            context: .
+          - image: watcher
+            dockerfile: watcher/Dockerfile
+            context: watcher # its Dockerfile and .dockerignore are written for this context
+          - image: pwa
+            dockerfile: pwa/Dockerfile
+            context: .
+            build-args: |
+              VITE_API_URL=/api
+              VITE_NETWORK=test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # workflow_run: build the commit CI actually tested, not the current tip of main.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - id: ver
+        env:
+          BUILT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          TIP_SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          echo "short=${BUILT_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          # The floating `main` tag only moves for the commit that is still the tip of main.
+          main=false
+          if [ "$EVENT" = workflow_run ] && [ "$BUILT_SHA" = "$TIP_SHA" ]; then main=true; fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" = refs/heads/main ]; then main=true; fi
+          echo "main=$main" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/vitalikcholan/ztab-${{ matrix.image }}
+          tags: |
+            type=raw,value=main,enable=${{ steps.ver.outputs.main }}
+            type=raw,value=sha-${{ steps.ver.outputs.short }}
+            type=ref,event=tag
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build-args }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

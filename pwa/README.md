@@ -18,13 +18,24 @@ pnpm --filter @ztab/pwa preview        # serve the build on :4173
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `VITE_API_URL` | yes | `http://127.0.0.1:3000` (in `.env.example`) | Base URL of the ZTab API |
+| `VITE_API_URL` | yes | `http://127.0.0.1:3000` (in `.env.example`) | Base URL of the ZTab API: absolute, or a path such as `/api` (resolved against the page origin; used behind a reverse proxy) |
 | `VITE_NETWORK` | yes | `test` (in `.env.example`) | `test` or `main` |
 | `VITE_EXPLORER_TX_URL` | no | empty | Block explorer tx link prefix, e.g. `https://explorer.example/tx/` |
 | `VITE_DEMO_PAYMENT` | no | unset | Reserved, leave unset |
 | `VITE_HTTPS` | no | unset | `1` serves the dev server over self-signed HTTPS (`vite.config.ts`) |
 
 `VITE_*` values are baked into the bundle at build time.
+
+## Container
+
+`pwa/Dockerfile` builds the bundle and ships it as a one-shot image: on start it empties `/srv/pwa` (a mounted volume), copies the built files into it, prints `pwa: dist copied (<n> files)` and exits. A web server container serves the same volume. Build from the repo root:
+
+```bash
+docker build -f pwa/Dockerfile --build-arg VITE_API_URL=/api --build-arg VITE_NETWORK=test -t ztab-pwa .
+docker run --rm -v pwa-dist:/srv/pwa ztab-pwa
+```
+
+`VITE_EXPLORER_TX_URL` is an optional build arg. The committed `crypto/pkg` wasm is used as is; it is not rebuilt in the image.
 
 ## Test
 
@@ -69,19 +80,21 @@ Mirrors spec section 9. A privacy leak is the failure mode that matters here.
 | The service worker caches build assets only, never API responses or tab pages | Workbox precache with no `runtimeCaching` and `navigateFallbackDenylist: [/^\/t\//]` in `vite.config.ts` |
 | Outbound links use `rel="noopener noreferrer"`; the page sends no referrer | `index.html` `<meta name="referrer" content="no-referrer">` |
 
-## Expected reverse-proxy headers
+## Reverse-proxy headers
 
-Not implemented here; the infra step sets them on the host that serves `pwa/dist`.
+The Caddy in [`deploy/`](../deploy/README.md) (`deploy/Caddyfile`) sets these on everything it serves from `pwa/dist`; this app sets none itself. HSTS is sent only when `DOMAIN` is a real domain (not `localhost`, not `*.sslip.io`), so a throwaway host is never pinned.
 
 ```
-Content-Security-Policy: default-src 'self'; connect-src 'self' <API origin>; img-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'
-Strict-Transport-Security: max-age=63072000; includeSubDomains
+Content-Security-Policy: default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+Strict-Transport-Security: max-age=31536000
 Referrer-Policy: no-referrer
 Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
 X-Content-Type-Options: nosniff
 ```
 
-Policy verified by reading the build output (`pnpm --filter @ztab/pwa build`): `dist/index.html` has one external module script, the PWA `registerSW.js` script and a linked stylesheet, with no inline script or style, and `src` has no `style=` props, so `style-src 'self'` suffices and `'unsafe-inline'` is not needed. `'wasm-unsafe-eval'` is required in `script-src` to compile the `@ztab/crypto` wasm. The service worker (`sw.js`) is covered by `script-src 'self'` via the `worker-src` fallback. The QR is a canvas, so `img-src data:` is only a safety margin. This was checked by reading the output, not by running a browser under the header; test it once on the real host.
+`connect-src 'self'` is enough because the API is served from the same origin under `/api` (`VITE_API_URL=/api`). The CSP has no `'unsafe-eval'`: `src/zod-config.ts` sets zod's `jitless` mode, because zod's JIT probe would otherwise raise a CSP violation.
+
+Policy verified by reading the build output (`pnpm --filter @ztab/pwa build`): `dist/index.html` has one external module script, the PWA `registerSW.js` script and a linked stylesheet, with no inline script or style, and `src` has no `style=` props, so `style-src 'self'` suffices and `'unsafe-inline'` is not needed. `'wasm-unsafe-eval'` is required in `script-src` to compile the `@ztab/crypto` wasm. The service worker (`sw.js`) is covered by `script-src 'self'` via the `worker-src` fallback. The QR is a canvas, so `img-src data:` is only a safety margin. It is also checked in a real browser under this header by the deploy smoke test (`deploy/smoke/stack.spec.ts`): wasm boots and the service worker registers.
 
 ## Wallet compatibility
 

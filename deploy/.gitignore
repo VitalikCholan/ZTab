@@ -1,0 +1,3 @@
+# Caddy's local root CA exported by rehearsal.sh for the smoke.
+smoke/.ca.crt
+smoke/test-results/
