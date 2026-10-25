@@ -25,18 +25,10 @@ export function Landing() {
         {synced === null ? net : `${net} · ${synced ? 'synced' : 'syncing…'}`}
       </span>
       <h1 className="text-4xl font-bold">ZTab</h1>
-      <p className="text-neutral-600">Split bills privately on shielded Zcash.</p>
+      <p className="text-neutral-600">Split bills privately on Zcash.</p>
       <Link to="/new" className="w-fit rounded bg-neutral-900 px-4 py-2 font-medium text-white">
         Create a tab
       </Link>
-      <a
-        href="https://github.com/VitalikCholan/ZTab"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="w-fit text-sm text-neutral-600 underline"
-      >
-        GitHub
-      </a>
     </main>
   );
 }

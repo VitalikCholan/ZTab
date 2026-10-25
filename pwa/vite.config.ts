@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => ({
       manifest: {
         name: 'ZTab',
         short_name: 'ZTab',
-        description: 'Split bills privately on shielded Zcash.',
+        description: 'Split bills privately on Zcash.',
         display: 'standalone',
         start_url: '/',
         theme_color: '#111827',
