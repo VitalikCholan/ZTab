@@ -9,7 +9,7 @@ test('boots, loads wasm, talks only to localhost', async ({ page }) => {
   });
   await page.goto('/');
   await expect(page).toHaveTitle('ZTab');
-  await expect(page.getByText('Testnet')).toBeVisible();
+  await expect(page.getByText(/^Testnet/)).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-wasm', 'ready', { timeout: 5000 });
   expect([...hosts].filter((h) => h !== '127.0.0.1' && h !== 'localhost')).toEqual([]);
 });
